@@ -1,0 +1,76 @@
+<?php
+declare(strict_types=1);
+/**
+ * FSBR Toolkit: проверка отчёта → расчёт РО/ПБ/МБ → SQL
+ */
+session_start();
+
+$tab = $_GET['tab'] ?? $_POST['tab'] ?? 'check';
+if (!in_array($tab, ['check', 'rating', 'sql'], true)) {
+    $tab = 'check';
+}
+
+// Передача JSON с шага проверки на шаг расчёта
+if ($tab === 'rating' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !empty($_POST['from_check_json'])) {
+    $_SESSION['report_json'] = $_POST['from_check_json'];
+}
+if ($tab === 'rating' && empty($_POST['json_text']) && empty($_FILES['json']['tmp_name']) && !empty($_SESSION['report_json'])) {
+    // подставим в rating через глобаль
+    $GLOBALS['prefill_json'] = $_SESSION['report_json'];
+}
+
+function toolkit_nav(string $active): void {
+    $tabs = [
+        'check' => '1. Проверка отчёта',
+        'rating' => '2. Расчёт РО / ПБ / МБ',
+        'sql' => '3. SQL',
+    ];
+    echo '<nav class="tabs">';
+    foreach ($tabs as $id => $label) {
+        $cls = $id === $active ? 'tab active' : 'tab';
+        echo '<a class="' . $cls . '" href="?tab=' . htmlspecialchars($id) . '">' . htmlspecialchars($label) . '</a>';
+    }
+    echo '</nav>';
+}
+?>
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FSBR — проверка и расчёт турнира</title>
+<style>
+:root{--bg:#0f1419;--card:#1a2332;--accent:#3b82f6;--text:#e7ecf3;--muted:#94a3b8;--ok:#22c55e;--err:#ef4444;--warn:#f59e0b}
+*{box-sizing:border-box}
+body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);margin:0;padding:0}
+.header{padding:16px 24px 0;max-width:1100px;margin:0 auto}
+.header h1{font-size:1.25rem;margin:0 0 4px}
+.header .sub{color:var(--muted);font-size:.9rem;margin:0 0 12px}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:0;border-bottom:1px solid #2a3548;padding-bottom:0}
+.tab{display:inline-block;padding:10px 16px;color:var(--muted);text-decoration:none;border-radius:8px 8px 0 0;font-size:.95rem}
+.tab:hover{color:var(--text);background:#1a2332}
+.tab.active{color:#fff;background:var(--card);border:1px solid #2a3548;border-bottom-color:var(--card)}
+.main{max-width:1100px;margin:0 auto;padding:0 24px 32px}
+/* вложенные страницы без своего body padding */
+.embed-wrap{padding-top:16px}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>FSBR — турнирный отчёт</h1>
+  <p class="sub">Проверка отчёта → расчёт РО/ПБ/МБ → подготовка SQL</p>
+  <?php toolkit_nav($tab); ?>
+</div>
+<div class="main embed-wrap">
+<?php
+if ($tab === 'check') {
+    require __DIR__ . '/check_body.php';
+} elseif ($tab === 'rating') {
+    require __DIR__ . '/rating_body.php';
+} else {
+    require __DIR__ . '/sql_body.php';
+}
+?>
+</div>
+</body>
+</html>
