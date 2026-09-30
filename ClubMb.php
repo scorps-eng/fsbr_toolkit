@@ -1,0 +1,739 @@
+<?php
+declare(strict_types=1);
+/**
+ * Клубные МБ: разбор отчёта, проверка игроков, SQL type=5.
+ */
+require_once __DIR__ . '/XlsReader.php';
+if (file_exists(__DIR__ . '/config.php')) {
+    $CONFIG = require __DIR__ . '/config.php';
+    if (!defined('DB_HOST')) {
+        define('DB_HOST', $CONFIG['db_host']);
+        define('DB_USER', $CONFIG['db_user']);
+        define('DB_PASS', $CONFIG['db_pass']);
+        define('DB_NAME', $CONFIG['db_name']);
+    }
+}
+
+function cmb_h(?string $s): string {
+    return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+}
+
+function cmb_db(): ?mysqli {
+    if (!defined('DB_HOST')) return null;
+    $m = @new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
+    if ($m->connect_errno) return null;
+    $m->set_charset('utf8mb4');
+    return $m;
+}
+
+function cmb_cell(array $row, int $i): string {
+    if (!array_key_exists($i, $row) || $row[$i] === null) return '';
+    $v = $row[$i];
+    if (is_int($v) || is_float($v)) {
+        if (is_float($v) && abs($v - round($v)) < 1e-9) return (string)(int)round($v);
+        return (string)$v;
+    }
+    return trim((string)$v);
+}
+
+function cmb_parse_date($v): ?string {
+    if ($v === null || $v === '') return null;
+    if (is_numeric($v) && (float)$v > 20000) {
+        // Excel serial
+        $unix = ((int)(float)$v - 25569) * 86400;
+        return gmdate('Y-m-d', $unix);
+    }
+    $s = trim((string)$v);
+    if (preg_match('/^(\d{4})-(\d{2})-(\d{2})/', $s, $m)) {
+        return $m[1] . '-' . $m[2] . '-' . $m[3];
+    }
+    // "1 сентября 2026"
+    $months = [
+        'января'=>1,'февраля'=>2,'марта'=>3,'апреля'=>4,'мая'=>5,'июня'=>6,
+        'июля'=>7,'августа'=>8,'сентября'=>9,'октября'=>10,'ноября'=>11,'декабря'=>12,
+    ];
+    if (preg_match('/(\d{1,2})\s+([а-яё]+)\s+(\d{4})/ui', $s, $m)) {
+        $mon = mb_strtolower($m[2], 'UTF-8');
+        if (isset($months[$mon])) {
+            return sprintf('%04d-%02d-%02d', (int)$m[3], $months[$mon], (int)$m[1]);
+        }
+    }
+    $ts = strtotime($s);
+    return $ts ? date('Y-m-d', $ts) : null;
+}
+
+/**
+ * @return array{meta:array,players:list<array>,errors:list<string>}
+ */
+function cmb_parse_rows(array $rows): array
+{
+    $meta = [
+        'region' => '',
+        'club' => '',
+        'date_from' => null,
+        'date_to' => null,
+        'total_declared' => null,
+    ];
+    $players = [];
+    $errors = [];
+
+    foreach ($rows as $ri => $row) {
+        $c0 = cmb_cell($row, 0);
+        $c1 = cmb_cell($row, 1);
+        $c2 = cmb_cell($row, 2);
+        $c3 = cmb_cell($row, 3);
+        $c6 = cmb_cell($row, 6);
+        $c7 = cmb_cell($row, 7);
+
+        // meta row: Регион | name | Клуб | club | Дата с | date
+        if (mb_stripos($c1, 'Регион') !== false || mb_stripos($c0, 'Регион') !== false) {
+            $meta['region'] = $c2 !== '' ? $c2 : $c1;
+            if (mb_stripos($c1, 'Регион') !== false) {
+                $meta['region'] = $c2;
+            }
+            // club in col3 label "Клуб", value col4
+            $c4 = cmb_cell($row, 4);
+            if (mb_stripos(cmb_cell($row, 3), 'Клуб') !== false && $c4 !== '') {
+                $meta['club'] = $c4;
+            }
+            // Дата с often col6 label area, value col7 or next
+            for ($ci = 0; $ci < count($row); $ci++) {
+                $cv = cmb_cell($row, $ci);
+                if (mb_stripos($cv, 'Дата с') !== false || $cv === 'с') {
+                    $meta['date_from'] = cmb_parse_date($row[$ci + 1] ?? null) ?? $meta['date_from'];
+                }
+                if ($cv === 'по' || mb_stripos($cv, 'Дата по') !== false) {
+                    $meta['date_to'] = cmb_parse_date($row[$ci + 1] ?? null) ?? $meta['date_to'];
+                }
+            }
+            // common layout: col6 = date from value when label is nearby
+            if ($meta['date_from'] === null && $c6 !== '') {
+                $meta['date_from'] = cmb_parse_date($row[6] ?? null);
+            }
+            if ($meta['date_to'] === null && $c7 !== '') {
+                $meta['date_to'] = cmb_parse_date($row[7] ?? null);
+            }
+            continue;
+        }
+        if (mb_stripos($c1, 'Всего игроков') !== false || mb_stripos($c0, 'Всего') !== false) {
+            if (is_numeric($c3)) {
+                $meta['total_declared'] = (int)$c3;
+            } elseif (is_numeric($c2)) {
+                $meta['total_declared'] = (int)$c2;
+            }
+            // dates on this row too
+            for ($ci = 0; $ci < count($row); $ci++) {
+                $cv = cmb_cell($row, $ci);
+                if ($cv === 'по' || mb_stripos($cv, 'по') === 0) {
+                    $d = cmb_parse_date($row[$ci + 1] ?? null);
+                    if ($d) $meta['date_to'] = $d;
+                }
+            }
+            if ($meta['date_to'] === null && $c7 !== '') {
+                $meta['date_to'] = cmb_parse_date($row[7] ?? null);
+            }
+            continue;
+        }
+
+        // header # id Игрок МБ
+        if ($c0 === '#' || (mb_strtolower($c1) === 'id' && mb_stripos($c2, 'Игрок') !== false)) {
+            continue;
+        }
+        if (mb_stripos($c0, 'Отчет по МБ') !== false) {
+            continue;
+        }
+
+        // left block: #, id, name, MB
+        $add = function ($num, $idRaw, $name, $mbRaw) use (&$players) {
+            $name = trim((string)$name);
+            $idRaw = trim((string)$idRaw);
+            $mbRaw = trim((string)$mbRaw);
+            if ($name === '' && $idRaw === '') return;
+            if ($name === '' && !is_numeric($idRaw)) return;
+            $pid = (is_numeric($idRaw) && $idRaw !== '') ? (int)$idRaw : null;
+            $mb = (is_numeric($mbRaw) && $mbRaw !== '') ? (0 + $mbRaw) : null;
+            if ($pid === null && $name === '') return;
+            if ($mb === null || $mb === 0) {
+                // skip empty MB rows
+                if ($name === '' && $pid === null) return;
+            }
+            $players[] = [
+                'n' => is_numeric($num) ? (int)$num : null,
+                'player_id' => $pid,
+                'name' => $name,
+                'mb' => $mb,
+            ];
+        };
+
+        if (is_numeric($c0) || $c0 === '') {
+            if ($c1 !== '' || $c2 !== '') {
+                $add($c0, $c1, $c2, $c3);
+            }
+        }
+        // right block: col5 #, col6 id, col7 name, col8 MB
+        $c5 = cmb_cell($row, 5);
+        $c8 = cmb_cell($row, 8);
+        if (is_numeric($c5) || ($c6 !== '' && $c7 !== '')) {
+            if ($c6 !== '' || $c7 !== '') {
+                $add($c5, $c6, $c7, $c8);
+            }
+        }
+    }
+
+    // dedupe by player_id (sum MB if duplicate)
+    $byId = [];
+    $noId = [];
+    foreach ($players as $p) {
+        if ($p['player_id'] !== null) {
+            $k = (int)$p['player_id'];
+            if (!isset($byId[$k])) {
+                $byId[$k] = $p;
+            } else {
+                $byId[$k]['mb'] = (float)($byId[$k]['mb'] ?? 0) + (float)($p['mb'] ?? 0);
+            }
+        } else {
+            $noId[] = $p;
+        }
+    }
+    $players = array_values($byId);
+    foreach ($noId as $p) {
+        $players[] = $p;
+    }
+
+    return ['meta' => $meta, 'players' => $players, 'errors' => $errors];
+}
+
+function cmb_load_file(string $path, string $orig): array
+{
+    $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
+    if ($ext === 'xls') {
+        $xls = new XlsReader($path);
+        $rows = [];
+        foreach ($xls->sheetNames() as $name) {
+            $r = $xls->readSheet($name);
+            if (count($r) > 3) {
+                $rows = $r;
+                break;
+            }
+            if (!$rows && $r) {
+                $rows = $r;
+            }
+        }
+    } elseif ($ext === 'xlsx') {
+        if (!class_exists('ZipArchive')) {
+            throw new RuntimeException('Для .xlsx нужно расширение PHP zip (ZipArchive)');
+        }
+        $zip = new ZipArchive();
+        if ($zip->open($path) !== true) {
+            throw new RuntimeException('Не удалось открыть xlsx');
+        }
+        $shared = [];
+        $ss = $zip->getFromName('xl/sharedStrings.xml');
+        if ($ss !== false && $ss !== '') {
+            $sx = @simplexml_load_string($ss);
+            if ($sx !== false) {
+                $sx->registerXPathNamespace('m', 'http://schemas.openxmlformats.org/spreadsheetml/2006/main');
+                $nodes = $sx->xpath('//m:si');
+                if (!$nodes) {
+                    $nodes = $sx->xpath('//*[local-name()="si"]');
+                }
+                foreach ($nodes ?: [] as $si) {
+                    $parts = $si->xpath('.//m:t');
+                    if (!$parts) {
+                        $parts = $si->xpath('.//*[local-name()="t"]');
+                    }
+                    $text = '';
+                    foreach ($parts ?: [] as $tt) {
+                        $text .= (string)$tt;
+                    }
+                    $shared[] = $text;
+                }
+            }
+        }
+        $xml = $zip->getFromName('xl/worksheets/sheet1.xml');
+        if ($xml === false || $xml === '') {
+            // первая попавшаяся sheet*.xml
+            for ($i = 0; $i < $zip->numFiles; $i++) {
+                $n = $zip->getNameIndex($i);
+                if (preg_match('#xl/worksheets/sheet\d+\.xml$#', (string)$n)) {
+                    $xml = $zip->getFromIndex($i);
+                    break;
+                }
+            }
+        }
+        $zip->close();
+        if ($xml === false || $xml === '') {
+            throw new RuntimeException('В xlsx нет листа с данными');
+        }
+        $sx = @simplexml_load_string($xml);
+        if ($sx === false) {
+            throw new RuntimeException('Не разобрать sheet XML');
+        }
+        $sx->registerXPathNamespace('m', 'http://schemas.openxmlformats.org/spreadsheetml/2006/main');
+        $rowNodes = $sx->xpath('//m:sheetData/m:row');
+        if (!$rowNodes) {
+            $rowNodes = $sx->xpath('//*[local-name()="sheetData"]/*[local-name()="row"]');
+        }
+        $rows = [];
+        foreach ($rowNodes ?: [] as $row) {
+            $cells = $row->xpath('./m:c');
+            if (!$cells) {
+                $cells = $row->xpath('./*[local-name()="c"]');
+            }
+            $r = [];
+            foreach ($cells ?: [] as $c) {
+                $ref = (string)$c['r'];
+                $col = 0;
+                if (preg_match('/([A-Z]+)/', $ref, $mm)) {
+                    $letters = $mm[1];
+                    for ($i = 0; $i < strlen($letters); $i++) {
+                        $col = $col * 26 + (ord($letters[$i]) - 64);
+                    }
+                    $col--;
+                } else {
+                    $col = count($r);
+                }
+                $v = null;
+                $vNode = $c->xpath('./m:v');
+                if (!$vNode) {
+                    $vNode = $c->xpath('./*[local-name()="v"]');
+                }
+                $isInline = ((string)$c['t'] === 'inlineStr');
+                if ($isInline) {
+                    $tNodes = $c->xpath('.//m:t');
+                    if (!$tNodes) {
+                        $tNodes = $c->xpath('.//*[local-name()="t"]');
+                    }
+                    $v = '';
+                    foreach ($tNodes ?: [] as $tt) {
+                        $v .= (string)$tt;
+                    }
+                } elseif ($vNode) {
+                    $raw = (string)$vNode[0];
+                    if ((string)$c['t'] === 's') {
+                        $v = $shared[(int)$raw] ?? $raw;
+                    } elseif (is_numeric($raw)) {
+                        $v = 0 + $raw;
+                    } else {
+                        $v = $raw;
+                    }
+                }
+                $r[$col] = $v;
+            }
+            if ($r) {
+                $max = max(array_keys($r));
+                $line = array_fill(0, $max + 1, null);
+                foreach ($r as $k => $v) {
+                    $line[$k] = $v;
+                }
+                $rows[] = $line;
+            }
+        }
+        if (count($rows) < 2) {
+            throw new RuntimeException('xlsx: не удалось прочитать строки (проверьте расширение zip / формат файла)');
+        }
+    } else {
+        throw new RuntimeException('Нужен .xls или .xlsx');
+    }
+    $parsed = cmb_parse_rows($rows);
+    $parsed['file'] = $orig;
+    return $parsed;
+}
+
+function cmb_normalize_name(string $name): string {
+    $s = mb_strtolower(trim($name), 'UTF-8');
+    $s = preg_replace('/\s+/u', ' ', $s) ?? $s;
+    $s = str_replace(['ё','Ё'], ['е','е'], $s);
+    return $s;
+}
+
+function cmb_validate(array $players): array
+{
+    $db = cmb_db();
+    $out = [];
+    foreach ($players as $p) {
+        $entry = $p + ['status' => 'no_id', 'db_fio' => null, 'city' => null];
+        $pid = $p['player_id'] ?? null;
+        if ($pid === null || $pid === '') {
+            $entry['status'] = 'no_id';
+            $out[] = $entry;
+            continue;
+        }
+        if (!$db) {
+            $entry['status'] = 'ok'; // нет БД — не проверяем
+            $out[] = $entry;
+            continue;
+        }
+        $pid = (int)$pid;
+        $res = $db->query("SELECT p.player_id, p.firstname AS family, p.lastname AS given, p.surname AS patronymic,
+            c.city_name, p.state
+            FROM players p LEFT JOIN cities c ON c.city_id = p.city_id
+            WHERE p.player_id = {$pid} LIMIT 1");
+        $row = $res ? $res->fetch_assoc() : null;
+        if (!$row) {
+            $entry['status'] = 'unknown_id';
+            $out[] = $entry;
+            continue;
+        }
+        $dbFio = trim(($row['family'] ?? '') . ' ' . ($row['given'] ?? '') . ' ' . ($row['patronymic'] ?? ''));
+        $entry['db_fio'] = $dbFio;
+        $entry['city'] = $row['city_name'] ?? null;
+        $entry['state'] = isset($row['state']) ? (int)$row['state'] : null;
+        // сравнение имён — мягкое
+        $rep = cmb_normalize_name($p['name'] ?? '');
+        $dbn = cmb_normalize_name($dbFio);
+        $dbShort = cmb_normalize_name(trim(($row['family'] ?? '') . ' ' . mb_substr((string)($row['given'] ?? ''), 0, 1, 'UTF-8')));
+        if ($rep === '' || str_contains($dbn, $rep) || str_contains($rep, cmb_normalize_name($row['family'] ?? ''))
+            || similar_text($rep, $dbn) / max(1, mb_strlen($dbn)) > 0.5) {
+            $entry['status'] = 'ok';
+        } else {
+            $entry['status'] = 'name_mismatch';
+        }
+        if (in_array((int)($row['state'] ?? 0), [3, 4], true)) {
+            $entry['status_warn'] = (int)$row['state'] === 3 ? 'умер' : 'не активен';
+        }
+        $out[] = $entry;
+    }
+    if ($db) $db->close();
+    return $out;
+}
+
+function cmb_region_aliases(): array
+{
+    // регион / написание → предпочтительное имя города в cities
+    return [
+        'ростовская область' => 'Ростов-На-Дону',
+        'ростовская' => 'Ростов-На-Дону',
+        'ростов' => 'Ростов-На-Дону',
+        'ростов-на-дону' => 'Ростов-На-Дону',
+        'ростов на дону' => 'Ростов-На-Дону',
+        'с.-петербург' => 'С.-Петербург',
+        'санкт-петербург' => 'С.-Петербург',
+        'спб' => 'С.-Петербург',
+        'питер' => 'С.-Петербург',
+        'ленинградская область' => 'С.-Петербург',
+        'московская область' => 'Москва',
+        'москва' => 'Москва',
+        'нижний новгород' => 'Н. Новгород',
+        'н.новгород' => 'Н. Новгород',
+        'н. новгород' => 'Н. Новгород',
+        'нижегородская область' => 'Н. Новгород',
+        'екатеринбург' => 'Екатеринбург',
+        'свердловская область' => 'Екатеринбург',
+        'новосибирск' => 'Новосибирск',
+        'новосибирская область' => 'Новосибирск',
+        'челябинск' => 'Челябинск',
+        'челябинская область' => 'Челябинск',
+        'самара' => 'Самара',
+        'самарская область' => 'Самара',
+        'пермь' => 'Пермь',
+        'пермский край' => 'Пермь',
+        'красноярск' => 'Красноярск',
+        'красноярский край' => 'Красноярск',
+        'омск' => 'Омск',
+        'омская область' => 'Омск',
+        'новокузнецк' => 'Новокузнецк',
+        'кемеровская область' => 'Новокузнецк',
+        'астана' => 'Астана',
+        'нур-султан' => 'Астана',
+        'алматы' => 'Алматы',
+        'алма-ата' => 'Алматы',
+        'ереван' => 'Ереван',
+        'минск' => 'Минск',
+        'сочи' => 'Сочи',
+        'краснодар' => 'Краснодар',
+        'краснодарский край' => 'Краснодар',
+        'воронеж' => 'Воронеж',
+        'воронежская область' => 'Воронеж',
+        'казань' => 'Казань',
+        'татарстан' => 'Казань',
+        'уфа' => 'Уфа',
+        'башкортостан' => 'Уфа',
+        'тюмень' => 'Тюмень',
+        'тюменская область' => 'Тюмень',
+        'иркутск' => 'Иркутск',
+        'иркутская область' => 'Иркутск',
+        'хабаровск' => 'Хабаровск',
+        'владивосток' => 'Владивосток',
+        'приморский край' => 'Владивосток',
+        'калининград' => 'Калининград',
+        'калининградская область' => 'Калининград',
+        'ярославль' => 'Ярославль',
+        'тула' => 'Тула',
+        'тверь' => 'Тверь',
+        'рязань' => 'Рязань',
+        'пенза' => 'Пенза',
+        'саратов' => 'Саратов',
+        'волгоград' => 'Волгоград',
+        'томск' => 'Томск',
+        'барнаул' => 'Барнаул',
+        'владикавказ' => 'Владикавказ',
+        'ставрополь' => 'Ставрополь',
+        'ставропольский край' => 'Ставрополь',
+    ];
+}
+
+function cmb_norm_place(string $s): string
+{
+    $s = mb_strtolower(trim($s), 'UTF-8');
+    $s = str_replace(['ё', 'Ё'], ['е', 'е'], $s);
+    $s = preg_replace('/\s+/u', ' ', $s) ?? $s;
+    return $s;
+}
+
+/** @return list<array{city_id:int,city_name:string}> */
+function cmb_load_cities(?mysqli $db): array
+{
+    if (!$db) return [];
+    $res = @$db->query('SELECT city_id, city_name FROM cities ORDER BY city_name');
+    if (!$res) return [];
+    $out = [];
+    while ($row = $res->fetch_assoc()) {
+        $out[] = ['city_id' => (int)$row['city_id'], 'city_name' => (string)$row['city_name']];
+    }
+    $res->free();
+    return $out;
+}
+
+/**
+ * @return array{city_id:?int, city_name:?string, matched_by:?string}
+ */
+function cmb_resolve_city(?mysqli $db, array $meta, ?int $forcedId = null): array
+{
+    if ($forcedId && $db) {
+        $id = (int)$forcedId;
+        $res = @$db->query("SELECT city_id, city_name FROM cities WHERE city_id = {$id} LIMIT 1");
+        if ($res && ($row = $res->fetch_assoc())) {
+            return ['city_id' => (int)$row['city_id'], 'city_name' => (string)$row['city_name'], 'matched_by' => 'manual'];
+        }
+    }
+    if (!$db) {
+        return ['city_id' => null, 'city_name' => null, 'matched_by' => null];
+    }
+
+    $rawList = [];
+    foreach (['club', 'region'] as $k) {
+        $s = trim((string)($meta[$k] ?? ''));
+        if ($s !== '') $rawList[] = $s;
+    }
+    $aliases = cmb_region_aliases();
+    $tryNames = [];
+    foreach ($rawList as $raw) {
+        $n = cmb_norm_place($raw);
+        if (isset($aliases[$n])) {
+            $tryNames[] = $aliases[$n];
+        }
+        // убрать «область/край/…»
+        $stripped = preg_replace('/\s*(область|край|республика|город|г\.|р-н|район)\s*/ui', ' ', $raw);
+        $stripped = trim($stripped ?? '');
+        if ($stripped !== '') {
+            $ns = cmb_norm_place($stripped);
+            if (isset($aliases[$ns])) {
+                $tryNames[] = $aliases[$ns];
+            }
+            $tryNames[] = $stripped;
+        }
+        $tryNames[] = $raw;
+        // первое слово
+        if (preg_match('/^([\p{L}\-]+)/u', $stripped !== '' ? $stripped : $raw, $m)) {
+            $w = $m[1];
+            $nw = cmb_norm_place($w);
+            if (isset($aliases[$nw])) {
+                $tryNames[] = $aliases[$nw];
+            }
+            $tryNames[] = $w;
+        }
+    }
+    $tryNames = array_values(array_unique(array_filter($tryNames)));
+
+    foreach ($tryNames as $q) {
+        $eq = $db->real_escape_string($q);
+        // точное (без регистра)
+        $res = @$db->query("SELECT city_id, city_name FROM cities WHERE city_name = '{$eq}' LIMIT 1");
+        if ($res && ($row = $res->fetch_assoc())) {
+            return ['city_id' => (int)$row['city_id'], 'city_name' => (string)$row['city_name'], 'matched_by' => 'exact:' . $q];
+        }
+        // LIKE с приоритетом более короткого имени (город, не область)
+        $res = @$db->query("SELECT city_id, city_name FROM cities WHERE city_name LIKE '{$eq}%' OR city_name LIKE '%{$eq}%' ORDER BY LENGTH(city_name) ASC LIMIT 5");
+        if ($res) {
+            $rows = [];
+            while ($row = $res->fetch_assoc()) $rows[] = $row;
+            $res->free();
+            if ($rows) {
+                // предпочесть без «область»
+                usort($rows, function ($a, $b) {
+                    $sa = preg_match('/область|край|респ/ui', $a['city_name']) ? 1 : 0;
+                    $sb = preg_match('/область|край|респ/ui', $b['city_name']) ? 1 : 0;
+                    if ($sa !== $sb) return $sa - $sb;
+                    return strlen($a['city_name']) - strlen($b['city_name']);
+                });
+                $row = $rows[0];
+                return ['city_id' => (int)$row['city_id'], 'city_name' => (string)$row['city_name'], 'matched_by' => 'like:' . $q];
+            }
+        }
+    }
+    return ['city_id' => null, 'city_name' => null, 'matched_by' => null];
+}
+
+/** SQL: tourn_header type=5 + tourn_ind (team_id=player_id). results не трогаем. */
+function cmb_build_sql(array $meta, array $validated, ?int $cityId = null, ?int $tournId = null, ?string $cityName = null): string
+{
+    $lines = [];
+    $region = trim((string)($meta['region'] ?? ''));
+    $club = trim((string)($meta['club'] ?? ''));
+    $df = $meta['date_from'] ?? null;
+    $dt = $meta['date_to'] ?? null;
+    // Имя всегда: «{Город} клубный»
+    $nameBase = trim((string)($cityName ?? ''));
+    if ($nameBase === '') {
+        $nameBase = $club !== '' ? $club : $region;
+        $nameBase = preg_replace('/\s*(область|край|республика)\s*/ui', '', $nameBase) ?? $nameBase;
+        $nameBase = trim($nameBase);
+    }
+    $nameBase = preg_replace('/\s*клубн\w*\s*$/ui', '', $nameBase) ?? $nameBase;
+    $nameBase = trim($nameBase);
+    if ($nameBase === '') {
+        $nameBase = 'Клубный';
+    } else {
+        $nameBase .= ' клубный';
+    }
+    $esc = function ($s) {
+        return str_replace(["\\", "'"], ["\\\\", "\\'"], (string)$s);
+    };
+
+    $lines[] = '-- Клубные МБ (type=5), образец tourn_id=8223 Челябинск клубный';
+    $lines[] = '-- ' . $nameBase . ' | ' . ($df ?? '?') . ' — ' . ($dt ?? '?') . ' | city_id=' . ($cityId ?? 'NULL');
+    $lines[] = '-- results не обновляем (месячные скрипты)';
+    $lines[] = 'START TRANSACTION;';
+    $lines[] = '';
+
+    if ($tournId) {
+        $tid = (string)(int)$tournId;
+        $lines[] = "-- Замена данных tourn_id = {$tid}";
+        $lines[] = "DELETE FROM tourn_ind WHERE tour_id = {$tid};";
+        $lines[] = "DELETE FROM results WHERE tourn_id = {$tid};";
+        $lines[] = "DELETE FROM tourn_header WHERE tourn_id = {$tid};";
+        $lines[] = '';
+        $tidSql = $tid;
+    } else {
+        $lines[] = 'SET @tourn_id = (SELECT IFNULL(MAX(tourn_id), 0) + 1 FROM tourn_header);';
+        $tidSql = '@tourn_id';
+    }
+
+    if ($cityId === null || (int)$cityId < 1) {
+        throw new InvalidArgumentException('city_id обязателен для клубных МБ');
+    }
+    $citySql = (string)(int)$cityId;
+    $dateEnd = $dt ? "'{$dt}'" : 'NULL';
+    $dateStart = $df ? "'{$df}'" : 'NULL';
+
+    $lines[] = 'INSERT INTO tourn_header (tourn_id, name, tour_date, tour_date_start, type, city_id, status, n_deals, champ_t, parent, stream, prev_id, next_id, note)';
+    $lines[] = 'VALUES (';
+    $lines[] = "  {$tidSql},";
+    $lines[] = "  '" . $esc($nameBase) . "',";
+    $lines[] = "  {$dateEnd},";
+    $lines[] = "  {$dateStart},";
+    $lines[] = '  5,';
+    $lines[] = "  {$citySql},";
+    $lines[] = '  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL';
+    $lines[] = ');';
+    $lines[] = '';
+    $lines[] = '-- tourn_ind: team_id = player_id, MB; PB=RO=EMB=0, PlaceH=PlaceL=0';
+
+    $n = 0;
+    foreach ($validated as $p) {
+        if (($p['status'] ?? '') === 'unknown_id') {
+            $lines[] = '-- SKIP unknown id ' . ($p['player_id'] ?? '') . ' ' . ($p['name'] ?? '');
+            continue;
+        }
+        if (($p['player_id'] ?? null) === null) {
+            $lines[] = '-- SKIP no id: ' . ($p['name'] ?? '');
+            continue;
+        }
+        $mb = (float)($p['mb'] ?? 0);
+        if ($mb <= 0) {
+            $lines[] = '-- SKIP zero MB id=' . (int)$p['player_id'];
+            continue;
+        }
+        $pid = (int)$p['player_id'];
+        $mbInt = (int)round($mb);
+        $lines[] = "INSERT INTO tourn_ind (tind_id, tour_id, team_id, PB, RO, MB, EMB, Result, PlaceH, PlaceL) VALUES (0, {$tidSql}, {$pid}, 0, 0, {$mbInt}, 0, 0, 0, 0);";
+        $n++;
+    }
+    $lines[] = '';
+    $lines[] = "-- игроков с МБ: {$n}";
+    $lines[] = 'COMMIT;';
+    return implode("\n", $lines) . "\n";
+}
+
+
+
+/** Быстрая проверка: это отчёт по клубным МБ? */
+function cmb_is_club_mb_file(string $path, string $origName): bool
+{
+    $ext = strtolower(pathinfo($origName, PATHINFO_EXTENSION));
+    try {
+        if ($ext === 'xls') {
+            $xls = new XlsReader($path);
+            foreach ($xls->sheetNames() as $name) {
+                $rows = $xls->readSheet($name);
+                foreach (array_slice($rows, 0, 5) as $row) {
+                    $line = implode(' ', array_map(fn($x) => (string)($x ?? ''), $row));
+                    if (preg_match('/Отчет по МБ|набранным в локальных/ui', $line)) {
+                        return true;
+                    }
+                }
+            }
+        } elseif ($ext === 'xlsx' && class_exists('ZipArchive')) {
+            $zip = new ZipArchive();
+            if ($zip->open($path) === true) {
+                $ss = $zip->getFromName('xl/sharedStrings.xml') ?: '';
+                $zip->close();
+                if (preg_match('/Отчет по МБ|набранным в локальных/ui', $ss)) {
+                    return true;
+                }
+            }
+        }
+    } catch (Throwable $e) {
+        return false;
+    }
+    return false;
+}
+
+/**
+ * Полный разбор + проверка для шага «Проверка отчёта».
+ * @return array{format:string,meta:array,players:array,city:array,city_error:?string,sql:?string}
+ */
+function cmb_process_report(string $path, string $origName, ?int $forcedCity = null, ?int $tournId = null): array
+{
+    $parsed = cmb_load_file($path, $origName);
+    $validated = cmb_validate($parsed['players']);
+    $db = cmb_db();
+    $cityInfo = cmb_resolve_city($db, $parsed['meta'], $forcedCity);
+    if ($db) {
+        $db->close();
+    }
+    $cityId = $cityInfo['city_id'] ?? null;
+    $cityError = null;
+    $sql = null;
+    if ($cityId === null) {
+        $cityError = 'Не удалось определить город по региону «' . ($parsed['meta']['region'] ?? '')
+            . '». Укажите city_id вручную.';
+    } else {
+        $sql = cmb_build_sql($parsed['meta'], $validated, (int)$cityId, $tournId, $cityInfo['city_name'] ?? null);
+    }
+    return [
+        'format' => 'club_mb',
+        'meta' => array_merge($parsed['meta'], [
+            'title' => 'Клубные МБ: ' . ($parsed['meta']['region'] ?? ''),
+            'date_from' => $parsed['meta']['date_from'] ?? null,
+            'date_to' => $parsed['meta']['date_to'] ?? null,
+        ]),
+        'players' => $validated,
+        'judges' => [],
+        'city' => $cityInfo,
+        'city_error' => $cityError,
+        'sql' => $sql,
+        'file' => $origName,
+    ];
+}

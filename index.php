@@ -1,12 +1,12 @@
 <?php
 declare(strict_types=1);
 /**
- * FSBR Toolkit: проверка отчёта → расчёт РО/ПБ/МБ → SQL
+ * FSBR Toolkit: турниры и клубные МБ — проверка → расчёт → SQL
  */
 session_start();
 
 $tab = $_GET['tab'] ?? $_POST['tab'] ?? 'check';
-if (!in_array($tab, ['check', 'rating', 'sql'], true)) {
+if (!in_array($tab, ['check', 'rating', 'sql', 'history'], true)) {
     $tab = 'check';
 }
 
@@ -24,6 +24,7 @@ function toolkit_nav(string $active): void {
         'check' => '1. Проверка отчёта',
         'rating' => '2. Расчёт РО / ПБ / МБ',
         'sql' => '3. SQL',
+        'history' => 'История',
     ];
     echo '<nav class="tabs">';
     foreach ($tabs as $id => $label) {
@@ -38,7 +39,7 @@ function toolkit_nav(string $active): void {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FSBR — проверка и расчёт турнира</title>
+<title>FSBR Toolkit — отчёты и рейтинг</title>
 <style>
 :root{--bg:#0f1419;--card:#1a2332;--accent:#3b82f6;--text:#e7ecf3;--muted:#94a3b8;--ok:#22c55e;--err:#ef4444;--warn:#f59e0b}
 *{box-sizing:border-box}
@@ -57,8 +58,8 @@ body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);mar
 </head>
 <body>
 <div class="header">
-  <h1>FSBR — турнирный отчёт</h1>
-  <p class="sub">Проверка отчёта → расчёт РО/ПБ/МБ → подготовка SQL</p>
+  <h1>FSBR Toolkit</h1>
+  <p class="sub">Турнирные протоколы и клубные МБ: проверка → расчёт РО/ПБ/МБ → SQL · история загрузок</p>
   <?php toolkit_nav($tab); ?>
 </div>
 <div class="main embed-wrap">
@@ -67,8 +68,10 @@ if ($tab === 'check') {
     require __DIR__ . '/check_body.php';
 } elseif ($tab === 'rating') {
     require __DIR__ . '/rating_body.php';
-} else {
+} elseif ($tab === 'sql') {
     require __DIR__ . '/sql_body.php';
+} elseif ($tab === 'history') {
+    require __DIR__ . '/history_body.php';
 }
 ?>
 </div>

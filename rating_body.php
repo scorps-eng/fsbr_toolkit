@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/RatingCalculator.php';
+require_once __DIR__ . '/TournamentSuggest.php';
 require_once __DIR__ . '/SqlExporter.php';
 
 
@@ -60,15 +61,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             throw new RuntimeException('Не задана длина турнира (d). Укажите вручную или в meta.length_actual');
         }
 
-        // auto-detect format from JSON if present
-        if (!empty($data['format']) && in_array($data['format'], ['pair', 'team'], true)) {
-            // form overrides
+        // Формат всегда из типа отчёта (JSON), не из ручного выбора
+        if (!empty($data['format']) && in_array($data['format'], ['pair', 'team', 'individual'], true)) {
+            $format = $data['format'];
+        } elseif (!empty($data['teams']) && empty($data['sum']['pairs'] ?? null)) {
+            $format = 'team';
+        } elseif (!empty($data['sum']['pairs'])) {
+            $format = 'pair';
         }
 
         $calc = new RatingCalculator($format, $status, $d, $guaranteed);
 
-        if ($format === 'team' || (!empty($data['format']) && $data['format'] === 'team' && empty($data['sum']))) {
-            $format = 'team';
+        if ($format === 'team') {
             $calc = new RatingCalculator('team', $status, $d, $guaranteed);
             foreach ($data['teams'] ?? [] as $tm) {
                 $rank = (int)($tm['rank'] ?? 0);
@@ -93,12 +97,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $label = $tm['team'] ?? ('Команда ' . $rank);
                 $calc->addEntry($rank, $qAvg, $label, $plist);
             }
+        } elseif ($format === 'individual') {
+            $pairs = $data['sum']['pairs'] ?? [];
+            foreach ($pairs as $pair) {
+                $rank = (int)($pair['rank'] ?? 0);
+                if ($rank < 1) continue;
+                $p1 = $pair['player1'] ?? [];
+                if (!$p1 && !empty($pair['name'])) {
+                    $p1 = $pair;
+                }
+                $q1 = RatingCalculator::qFromRazr($p1['razr'] ?? null);
+                $label = trim((string)($p1['name'] ?? ''));
+                $calc->addEntry($rank, $q1, $label, [
+                    ['name' => $p1['name'] ?? '', 'player_id' => $p1['player_id'] ?? null, 'razr' => $p1['razr'] ?? null, 'q' => $q1, 'db_fio' => $p1['db_fio'] ?? null],
+                ]);
+            }
         } else {
             // pair: from sum.pairs
             $pairs = $data['sum']['pairs'] ?? [];
-            if (!$pairs && !empty($data['players'])) {
-                // legacy flat — skip
-            }
             foreach ($pairs as $pair) {
                 $rank = (int)($pair['rank'] ?? 0);
                 if ($rank < 1) continue;
@@ -113,10 +129,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ['name' => $p2['name'] ?? '', 'player_id' => $p2['player_id'] ?? null, 'razr' => $p2['razr'] ?? null, 'q' => $q2, 'db_fio' => $p2['db_fio'] ?? null],
                 ]);
             }
-        }
-
-        if ($format === 'individual') {
-            throw new RuntimeException('Индивидуальный формат: загрузите JSON с полем players по местам (пока используйте пары/команды) или доработаем под ваш шаблон.');
         }
 
         $out = $calc->compute();
@@ -197,15 +209,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $p1 = ['name' => $pair['name1'] ?? '', 'player_id' => $pair['id1'] ?? null, 'razr' => $pair['razr1'] ?? null];
                     $p2 = ['name' => $pair['name2'] ?? '', 'player_id' => $pair['id2'] ?? null, 'razr' => $pair['razr2'] ?? null];
                 }
-                // enriched from sum path uses player1/player2
                 $q1 = RatingCalculator::qFromRazr($p1['razr'] ?? null);
-                $q2 = RatingCalculator::qFromRazr($p2['razr'] ?? null);
-                $qAvg = ($q1 + $q2) / 2.0;
-                $label = trim(($p1['name'] ?? '') . ' — ' . ($p2['name'] ?? ''));
-                $sc->addEntry($rank, $qAvg, $label, [
-                    ['name' => $p1['name'] ?? '', 'player_id' => $p1['player_id'] ?? ($p1['id'] ?? null), 'razr' => $p1['razr'] ?? null, 'q' => $q1],
-                    ['name' => $p2['name'] ?? '', 'player_id' => $p2['player_id'] ?? ($p2['id'] ?? null), 'razr' => $p2['razr'] ?? null, 'q' => $q2],
-                ]);
+                if ($format === 'individual') {
+                    $label = trim((string)($p1['name'] ?? ''));
+                    $sc->addEntry($rank, $q1, $label, [
+                        ['name' => $p1['name'] ?? '', 'player_id' => $p1['player_id'] ?? ($p1['id'] ?? null), 'razr' => $p1['razr'] ?? null, 'q' => $q1],
+                    ]);
+                } else {
+                    $q2 = RatingCalculator::qFromRazr($p2['razr'] ?? null);
+                    $qAvg = ($q1 + $q2) / 2.0;
+                    $label = trim(($p1['name'] ?? '') . ' — ' . ($p2['name'] ?? ''));
+                    $sc->addEntry($rank, $qAvg, $label, [
+                        ['name' => $p1['name'] ?? '', 'player_id' => $p1['player_id'] ?? ($p1['id'] ?? null), 'razr' => $p1['razr'] ?? null, 'q' => $q1],
+                        ['name' => $p2['name'] ?? '', 'player_id' => $p2['player_id'] ?? ($p2['id'] ?? null), 'razr' => $p2['razr'] ?? null, 'q' => $q2],
+                    ]);
+                }
             }
             if (count($sc->entries) < 1) {
                 continue;
@@ -278,6 +296,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ];
         }
 
+        unset($_SESSION['club_mb_report'], $_SESSION['club_mb_sql']);
         $_SESSION['rating_out'] = $out;
         $_SESSION['rating_format'] = $format;
         $_SESSION['rating_status'] = $status;
@@ -334,29 +353,75 @@ h1{font-size:1.35rem;margin:0 0 8px}
       <label>или вставьте JSON</label>
       <textarea name="json_text" placeholder='{"format":"pair","meta":{...},"sum":{"pairs":[...]}}'><?= h($GLOBALS["prefill_json"] ?? ($_POST["json_text"] ?? "")) ?></textarea>
 
+      <?php
+        $suggestTitle = '';
+        $fmtFromReport = 'pair';
+        $tmp = null;
+        if (!empty($_POST['json_text'])) {
+          $tmp = json_decode((string)$_POST['json_text'], true);
+        } elseif (!empty($GLOBALS['prefill_json'])) {
+          $tmp = json_decode((string)$GLOBALS['prefill_json'], true);
+        }
+        if (is_array($tmp)) {
+          $suggestTitle = (string)($tmp['meta']['title'] ?? '');
+          if (!empty($tmp['format']) && in_array($tmp['format'], ['pair','team','individual'], true)) {
+            $fmtFromReport = $tmp['format'];
+          } elseif (!empty($tmp['teams'])) {
+            $fmtFromReport = 'team';
+          }
+        }
+        $fmtGuess = $fmtFromReport;
+      ?>
       <label>Формат турнира</label>
       <select name="format">
         <?php foreach ($formatLabels as $k=>$v): ?>
-        <option value="<?= h($k) ?>"><?= h($v) ?></option>
+        <option value="<?= h($k) ?>" <?= $k===$fmtFromReport?'selected':'' ?>><?= h($v) ?></option>
         <?php endforeach; ?>
       </select>
+      <p class="note">Формат берётся из типа отчёта (<?= h($fmtFromReport) ?>); при расчёте приоритет у JSON.</p>
 
+      <?php
+        $stGuess = $_POST['status'] ?? 'rating';
+        $gSug = TournamentSuggest::suggestGuaranteed($suggestTitle, $fmtGuess, $stGuess);
+        $sSug = TournamentSuggest::suggestStatus($suggestTitle, $stGuess);
+        $defaultG = $_POST['guaranteed'] ?? $gSug['key'];
+        $defaultS = $_POST['status'] ?? $sSug['status'];
+      ?>
       <label>Статус</label>
       <select name="status">
         <?php foreach ($statusLabels as $k=>$v): ?>
-        <option value="<?= h($k) ?>" <?= $k==='rating'?'selected':'' ?>><?= h($v) ?></option>
+        <option value="<?= h($k) ?>" <?= $k===$defaultS?'selected':'' ?>><?= h($v) ?></option>
         <?php endforeach; ?>
       </select>
+      <?php if ($suggestTitle !== ''): ?>
+      <p class="note">Подсказка статуса: <b><?= h($sSug['status']) ?></b> — <?= h($sSug['reason']) ?></p>
+      <?php endif; ?>
 
       <label>Гарантированные ПБ (Прил. 1)</label>
       <select name="guaranteed">
         <?php foreach (RatingCalculator::GUARANTEED_PB_LABELS as $k=>$v): ?>
-        <option value="<?= h($k) ?>" <?= ($k===($_POST['guaranteed'] ?? 'none'))?'selected':'' ?>><?= h($v) ?></option>
+        <option value="<?= h($k) ?>" <?= ($k===$defaultG)?'selected':'' ?>><?= h($v) ?></option>
         <?php endforeach; ?>
       </select>
+      <?php if ($suggestTitle !== ''): ?>
+      <p class="note">Подсказка ПБ: <b><?= h($gSug['label']) ?></b> (<?= h($gSug['confidence']) ?>) — <?= h($gSug['reason']) ?></p>
+      <?php endif; ?>
 
-      <label>Фактическая длина d (сдач), если не в JSON</label>
-      <input type="number" name="length" step="1" min="1" placeholder="из meta.length_actual">
+      <?php
+        $defaultD = $_POST['length'] ?? '';
+        if ($defaultD === '' && is_array($tmp ?? null)) {
+          if (isset($tmp['meta']['length_actual']) && $tmp['meta']['length_actual'] !== '' && $tmp['meta']['length_actual'] !== null) {
+            $defaultD = (string)(0 + $tmp['meta']['length_actual']);
+          } elseif (isset($tmp['meta']['length']) && $tmp['meta']['length'] !== '' && $tmp['meta']['length'] !== null) {
+            $defaultD = (string)(0 + $tmp['meta']['length']);
+          }
+        }
+      ?>
+      <label>Фактическая длина d (сдач)</label>
+      <input type="number" name="length" step="1" min="1" value="<?= h((string)$defaultD) ?>" placeholder="из отчёта: meta.length_actual">
+      <?php if ($defaultD !== ''): ?>
+      <p class="note">Подставлено из отчёта: <b><?= h((string)$defaultD) ?></b> (фактическая длина / длина турнира)</p>
+      <?php endif; ?>
 
       <button class="btn" type="submit">Рассчитать</button>
     </form>

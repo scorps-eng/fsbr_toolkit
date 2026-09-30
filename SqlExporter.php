@@ -29,12 +29,18 @@ class SqlExporter
         return "'" . self::escape((string)$v) . "'";
     }
 
-    /** Число для SQL или NULL */
-    public static function sqlNumber($v): string
+    /** Число для SQL или NULL; Result округляем до 2 знаков */
+    public static function sqlNumber($v, int $decimals = 2): string
     {
         if ($v === null || $v === '' || $v === 'NULL') return 'NULL';
         if (is_array($v)) return 'NULL';
-        if (is_numeric($v)) return (string)(0 + $v);
+        if (is_numeric($v)) {
+            $n = 0 + $v;
+            if ($decimals >= 0) {
+                return number_format(round($n, $decimals), $decimals, '.', '');
+            }
+            return (string)$n;
+        }
         return 'NULL';
     }
 
@@ -79,10 +85,18 @@ class SqlExporter
         }
         $status = $opts['status_db'] ?? 'NULL';
         $stream = $opts['stream'] ?? 'NULL';
+        $prevIdRaw = $opts['prev_id'] ?? null;
+        if ($prevIdRaw === null || $prevIdRaw === '' || $prevIdRaw === 'NULL') {
+            $prevIdSql = 'NULL';
+            $prevIdInt = null;
+        } else {
+            $prevIdInt = (int)$prevIdRaw;
+            $prevIdSql = (string)$prevIdInt;
+        }
 
         $type = match ($format) {
             'team' => 3,
-            'individual' => 6,
+            'individual' => 1,
             default => 2,
         };
 
@@ -124,10 +138,14 @@ class SqlExporter
         $lines[] = "  {$champTSql},";
         $lines[] = '  NULL,';
         $lines[] = "  {$stream},";
-        $lines[] = '  NULL,';
-        $lines[] = '  NULL,';
+        $lines[] = "  {$prevIdSql},"; // prev_id
+        $lines[] = '  NULL,'; // next_id (проставит следующий турнир)
         $lines[] = '  NULL';
         $lines[] = ');';
+        if ($prevIdInt !== null) {
+            $lines[] = "-- Связка с предыдущим турниром prev_id={$prevIdInt}";
+            $lines[] = "UPDATE tourn_header SET next_id = {$tidSql} WHERE tourn_id = {$prevIdInt};";
+        }
         $lines[] = '';
 
         // group ranks for PlaceH/PlaceL
@@ -164,6 +182,27 @@ class SqlExporter
                 $p2 = (int)$p2;
                 $lines[] = 'INSERT INTO tourn_pair (tpair_id, tour_id, player1, player2, PB, RO, MB, EMB, Result, PlaceH, PlaceL) VALUES (';
                 $lines[] = "  0, {$tidSql}, {$p1}, {$p2}, {$pb}, {$ro}, {$mb}, 0, {$resultSql}, {$placeH}, {$placeL}";
+                $lines[] = ');';
+            }
+            $lines[] = '';
+                } elseif ($format === 'individual') {
+            $lines[] = '-- Индивидуал (tind_id=0 → auto_increment; team_id = player_id)';
+            foreach ($results as $i => $r) {
+                $players = $r['players'] ?? [];
+                $pl = $players[0] ?? null;
+                $pid = is_array($pl) ? ($pl['player_id'] ?? null) : null;
+                if ($pid === null || $pid === '' || is_array($pid)) {
+                    $lines[] = '-- SKIP individual without ID: ' . self::escape($r['label'] ?? '');
+                    continue;
+                }
+                $pid = (int)$pid;
+                [$placeH, $placeL] = $placeHL[$i] ?? [(int)$r['rank'], (int)$r['rank']];
+                $ro = (int)($r['RO'] ?? 0);
+                $pb = (int)($r['PB'] ?? 0);
+                $mb = (int)($r['MB'] ?? 0);
+                $resultSql = self::sqlNumber($opts['scores'][$i] ?? null);
+                $lines[] = 'INSERT INTO tourn_ind (tind_id, tour_id, team_id, PB, RO, MB, EMB, Result, PlaceH, PlaceL) VALUES (';
+                $lines[] = "  0, {$tidSql}, {$pid}, {$pb}, {$ro}, {$mb}, 0, {$resultSql}, {$placeH}, {$placeL}";
                 $lines[] = ');';
             }
             $lines[] = '';
@@ -207,11 +246,11 @@ class SqlExporter
 
 
         // сессии: отдельный tourn_header (type=4, parent=main) + tourn_ses
-        // tour_id = id сессии, main_tourn_id = id основного турнира
+        // tour_id = id сессии, main_tour_id = id основного турнира
         $sessions = $calcOut['sessions'] ?? [];
-        if ($sessions && $format === 'pair') {
+        if ($sessions && ($format === 'pair' || $format === 'individual')) {
             $lines[] = '-- Сессии / этапы: header type=4 + tourn_ses';
-            $lines[] = "DELETE FROM tourn_ses WHERE main_tourn_id = {$tidSql};";
+            $lines[] = "DELETE FROM tourn_ses WHERE main_tour_id = {$tidSql};";
             $lines[] = "DELETE FROM tourn_header WHERE parent = {$tidSql};";
             $lines[] = 'SET @sess_id = (SELECT IFNULL(MAX(tourn_id), 0) FROM tourn_header);';
             foreach ($sessions as $sr) {
@@ -236,11 +275,11 @@ class SqlExporter
                 $lines[] = "  {$cityId},";
                 $lines[] = "  {$status},";
                 $lines[] = "  {$boards},";
-                $lines[] = '  NULL,';
+                $lines[] = '  NULL,'; // champ_t сессии
                 $lines[] = "  {$tidSql},"; // parent = основной турнир
-                $lines[] = "  {$stream},";
-                $lines[] = '  NULL,';
-                $lines[] = '  NULL,';
+                $lines[] = '  NULL,'; // stream сессии ВСЕГДА NULL
+                $lines[] = '  NULL,'; // prev_id
+                $lines[] = '  NULL,'; // next_id
                 $lines[] = '  NULL';
                 $lines[] = ');';
 
@@ -262,14 +301,21 @@ class SqlExporter
                     $players = $rr['players'] ?? [];
                     $p1 = $players[0]['player_id'] ?? null;
                     $p2 = $players[1]['player_id'] ?? null;
-                    if ($p1 === null || $p2 === null) {
-                        $lines[] = '-- SKIP pair without ID rank ' . ($rr['rank'] ?? '');
+                    if ($p1 === null || $p1 === '') {
+                        $lines[] = '-- SKIP without ID rank ' . ($rr['rank'] ?? '');
+                        continue;
+                    }
+                    // индивидуал: player2 = 0
+                    if ($format === 'individual') {
+                        $p2 = 0;
+                    } elseif ($p2 === null || $p2 === '') {
+                        $lines[] = '-- SKIP pair without second ID rank ' . ($rr['rank'] ?? '');
                         continue;
                     }
                     $mb = (int)($rr['MB'] ?? 0);
                     [$ph, $pl] = $placeHLS[$ii] ?? [(int)($rr['rank'] ?? 0), (int)($rr['rank'] ?? 0)];
                     $res = self::sqlNumber($rr['result'] ?? null);
-                    $lines[] = 'INSERT INTO tourn_ses (tses_id, tour_id, main_tourn_id, player1, player2, MB, Result, PlaceH, PlaceL) VALUES (';
+                    $lines[] = 'INSERT INTO tourn_ses (tses_id, tour_id, main_tour_id, player1, player2, MB, Result, PlaceH, PlaceL) VALUES (';
                     $lines[] = '  0, @sess_id, ' . $tidSql . ', ' . (int)$p1 . ', ' . (int)$p2 . ", {$mb}, {$res}, {$ph}, {$pl}";
                     $lines[] = ');';
                 }

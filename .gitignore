@@ -1,5 +1,6 @@
 *.zip
 .DS_Store
 Thumbs.db
-config.local.php
 config.php
+config.local.php
+data/

@@ -11,10 +11,13 @@ declare(strict_types=1);
 
 $CONFIG = require __DIR__ . '/config.php';
 require_once __DIR__ . '/XlsReader.php';
-define('DB_HOST', $CONFIG['db_host']);
-define('DB_USER', $CONFIG['db_user']);
-define('DB_PASS', $CONFIG['db_pass']);
-define('DB_NAME', $CONFIG['db_name']);
+require_once __DIR__ . '/ClubMb.php';
+if (!defined('DB_HOST')) {
+    define('DB_HOST', $CONFIG['db_host']);
+    define('DB_USER', $CONFIG['db_user']);
+    define('DB_PASS', $CONFIG['db_pass']);
+    define('DB_NAME', $CONFIG['db_name']);
+}
 
 function h(?string $s): string {
     return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
@@ -456,32 +459,84 @@ function parse_rank_cell($raw, $lastRank, $rawCell = null): array
     return [null, false, null];
 }
 
+/**
+ * Определить раскладку таблицы результатов по строке заголовка.
+ * pair: rk | Игрок1 | Игрок2 | id1 | id2 | Рез
+ * individual: rk | Игрок1 | id1 | Рез
+ */
+function detect_results_layout(array $headerRow): string
+{
+    $cells = [];
+    for ($i = 0; $i < 8; $i++) {
+        $cells[$i] = mb_strtolower(cell($headerRow, $i));
+    }
+    $joined = implode(' ', $cells);
+    // явный id2 → парный
+    if (preg_match('/\bid2\b/u', $joined) || str_contains($joined, 'игрок 2') || str_contains($joined, 'player 2')) {
+        return 'pair';
+    }
+    // individual: id1 сразу после имени (col2 = id1), Рез в col3
+    if (preg_match('/\bid1\b/u', $cells[2] ?? '') || preg_match('/\bid\b/u', $cells[2] ?? '')) {
+        return 'individual';
+    }
+    // если в col2 только «рез»/result — тоже индивидуал
+    if (preg_match('/^рез|result|score|imp|vp/u', $cells[2] ?? '')) {
+        return 'individual';
+    }
+    // если есть id1 в col3 — классическая парная таблица
+    if (preg_match('/\bid1\b/u', $cells[3] ?? '')) {
+        return 'pair';
+    }
+    return 'pair';
+}
+
 function parse_pairs_table(array $rows): array
 {
     $headerRow = null;
+    $headerIdx = null;
     foreach ($rows as $i => $row) {
         $c0 = mb_strtolower(cell($row, 0));
         $joined = mb_strtolower(implode(' ', array_map(fn($x) => (string)($x ?? ''), $row)));
-        if ($c0 === 'rk' || strpos($joined, 'id1') !== false) {
-            $headerRow = $i;
+        if ($c0 === 'rk' || strpos($joined, 'id1') !== false || preg_match('/\bid\b/u', $joined)) {
+            $headerRow = $row;
+            $headerIdx = $i;
             break;
         }
     }
-    if ($headerRow === null) return [];
+    if ($headerIdx === null) return [];
+    $layout = detect_results_layout($headerRow);
     $pairs = [];
     $lastRank = null;
-    for ($i = $headerRow + 1; $i < count($rows); $i++) {
+    for ($i = $headerIdx + 1; $i < count($rows); $i++) {
         $row = $rows[$i];
-        $name1 = cell($row, 1);
-        $name2 = cell($row, 2);
-        if ($name1 === '' && $name2 === '') continue;
-        $id1raw = cell($row, 3);
-        $id2raw = cell($row, 4);
-        $resRaw = $row[5] ?? null;
+        if ($layout === 'individual') {
+            $name1 = cell($row, 1);
+            $name2 = '';
+            $id1raw = cell($row, 2);
+            $id2raw = '';
+            $resRaw = $row[3] ?? null;
+            if ($name1 === '') continue;
+            // строка-подсказка без места/результата
+            if (($id1raw === '' || !is_numeric($id1raw)) && ($resRaw === null || $resRaw === '')) {
+                // возможно имя в col1, но это не результат — пропуск пустых
+                if (!is_numeric(cell($row, 0)) && cell($row, 0) !== '=' && cell($row, 0) !== '') {
+                    // не строка таблицы
+                }
+            }
+        } else {
+            $name1 = cell($row, 1);
+            $name2 = cell($row, 2);
+            if ($name1 === '' && $name2 === '') continue;
+            $id1raw = cell($row, 3);
+            $id2raw = cell($row, 4);
+            $resRaw = $row[5] ?? null;
+        }
         $result = null;
         if ($resRaw !== null && $resRaw !== '' && is_numeric($resRaw)) {
             $result = 0 + $resRaw;
-        } elseif (cell($row, 5) !== '' && is_numeric(cell($row, 5))) {
+        } elseif ($layout === 'individual' && cell($row, 3) !== '' && is_numeric(cell($row, 3))) {
+            $result = 0 + cell($row, 3);
+        } elseif ($layout === 'pair' && cell($row, 5) !== '' && is_numeric(cell($row, 5))) {
             $result = 0 + cell($row, 5);
         }
         $rkRaw = trim(cell($row, 0));
@@ -490,8 +545,11 @@ function parse_pairs_table(array $rows): array
         if ($rk !== null) {
             $lastRank = $rk;
         }
-        // все строки с именами включаем; место может быть дозаполнено позже
         if ($name1 === '' && $name2 === '') {
+            continue;
+        }
+        // для индивидуала: если нет ни id ни result ни rank — мусор
+        if ($layout === 'individual' && $name1 !== '' && $id1raw === '' && $result === null && $rk === null) {
             continue;
         }
         $entry = [
@@ -501,6 +559,7 @@ function parse_pairs_table(array $rows): array
             'id1' => ($id1raw !== '' && is_numeric($id1raw)) ? (int)$id1raw : null,
             'id2' => ($id2raw !== '' && is_numeric($id2raw)) ? (int)$id2raw : null,
             'result' => $result,
+            'layout' => $layout,
         ];
         if ($rankTied) {
             $entry['rank_tied'] = true;
@@ -511,6 +570,18 @@ function parse_pairs_table(array $rows): array
         $pairs[] = $entry;
     }
     return $pairs;
+}
+
+function results_table_is_individual(array $pairs): bool
+{
+    if (!$pairs) return false;
+    $ind = 0;
+    $pair = 0;
+    foreach ($pairs as $p) {
+        if (($p['layout'] ?? '') === 'individual') $ind++;
+        else $pair++;
+    }
+    return $ind > $pair;
 }
 
 
@@ -917,8 +988,18 @@ function parse_xls_native(string $path): array
     if (!$sumPairs && !$sessions) {
         throw new RuntimeException('В .xls не найдены данные Sum / сессий');
     }
+    $fmt = 'pair';
+    $title = (string)($meta['title'] ?? '');
+    if (preg_match('/индивидуальн/ui', $title) || results_table_is_individual($sumPairs)) {
+        $fmt = 'individual';
+    } elseif ($sessions) {
+        $sessPairs = $sessions[0]['pairs'] ?? [];
+        if (results_table_is_individual($sessPairs)) {
+            $fmt = 'individual';
+        }
+    }
     return [
-        'format' => 'pair',
+        'format' => $fmt,
         'meta' => $meta,
         'judges' => $judges,
         'sum_pairs' => $sumPairs,
@@ -1132,6 +1213,7 @@ $meta = null;
 $results = null;
 $total = 0;
 $jsonReport = null;
+$clubMbMode = false;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
@@ -1147,10 +1229,75 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!move_uploaded_file($_FILES['file']['tmp_name'], $tmp)) {
             throw new RuntimeException('Не удалось сохранить файл');
         }
+        // Клубные МБ — отдельный формат, без расчёта рейтинга
+        if (cmb_is_club_mb_file($tmp, $orig)) {
+            $forcedCity = (!empty($_POST['city_id']) && ctype_digit((string)$_POST['city_id']))
+                ? (int)$_POST['city_id'] : null;
+            $tournIdOpt = (!empty($_POST['tourn_id']) && ctype_digit((string)$_POST['tourn_id']))
+                ? (int)$_POST['tourn_id'] : null;
+            $club = cmb_process_report($tmp, $orig, $forcedCity, $tournIdOpt);
+            @unlink($tmp);
+            $parsed = [
+                'format' => 'club_mb',
+                'meta' => $club['meta'],
+                'players' => array_map(function ($p) {
+                    return [
+                        'name' => $p['name'] ?? '',
+                        'player_id' => $p['player_id'] ?? null,
+                        'rank' => $p['n'] ?? null,
+                        'role' => 'player',
+                        'mb' => $p['mb'] ?? null,
+                    ];
+                }, $club['players']),
+                'judges' => [],
+                'sum_pairs' => [],
+                'sessions' => [],
+                'teams' => [],
+            ];
+            $meta = $club['meta'];
+            $results = validate($parsed['players'], []);
+            // enrich validated with club mb status from cmb_validate already done
+            // rebuild json for club
+            $jsonReport = [
+                'format' => 'club_mb',
+                'meta' => $club['meta'],
+                'city' => $club['city'],
+                'city_error' => $club['city_error'],
+                'sql' => $club['sql'],
+                'players' => $club['players'],
+                'summary' => [
+                    'players_total' => count($club['players']),
+                    'ok' => count(array_filter($club['players'], fn($p) => ($p['status'] ?? '') === 'ok')),
+                    'sum_mb' => array_sum(array_map(fn($p) => (float)($p['mb'] ?? 0), $club['players'])),
+                ],
+                'warnings' => $club['city_error'] ? [['message' => $club['city_error']]] : [],
+            ];
+            $_SESSION['report_json'] = json_encode($jsonReport, JSON_UNESCAPED_UNICODE);
+            $_SESSION['club_mb_sql'] = $club['sql'];
+            $_SESSION['club_mb_report'] = $jsonReport;
+            unset($_SESSION['rating_out']); // не смешивать с обычным турниром
+            $clubMbMode = true;
+            $total = count($club['players']);
+            $results = [
+                'ok' => array_values(array_filter($club['players'], fn($p) => ($p['status'] ?? '') === 'ok')),
+                'name_mismatch' => array_values(array_filter($club['players'], fn($p) => ($p['status'] ?? '') === 'name_mismatch')),
+                'no_id' => array_values(array_filter($club['players'], fn($p) => ($p['status'] ?? '') === 'no_id')),
+                'unknown_id' => array_values(array_filter($club['players'], fn($p) => ($p['status'] ?? '') === 'unknown_id')),
+                'status_warn' => [],
+                'judges_ok' => [],
+                'judges_issues' => [],
+                'json_players' => $club['players'],
+                'json_judges' => [],
+                'city_stats' => [],
+            ];
+        } else {
+        // обычный турнир — сбрасываем клубный контекст
+        unset($_SESSION['club_mb_report'], $_SESSION['club_mb_sql']);
         $parsed = parse_report($tmp, $orig);
         @unlink($tmp);
         $meta = $parsed['meta'] ?? [];
         $results = validate($parsed['players'] ?? [], $parsed['judges'] ?? []);
+        $clubMbMode = false;
         $total = count($results['ok']) + count($results['name_mismatch'])
                + count($results['no_id']) + count($results['unknown_id']);
         $playerInfo = [];
@@ -1161,31 +1308,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $enrichPair = function(array $pair) use ($playerInfo) {
             $p1key = $pair['id1'] !== null ? 'id:'.$pair['id1'] : 'name:'.normalize($pair['name1'] ?? '');
-            $p2key = $pair['id2'] !== null ? 'id:'.$pair['id2'] : 'name:'.normalize($pair['name2'] ?? '');
             $i1 = $playerInfo[$p1key] ?? null;
-            $i2 = $playerInfo[$p2key] ?? null;
+            $mk = function($name, $id, $info) {
+                return [
+                    'name' => $name,
+                    'player_id' => $id,
+                    'status' => $info['status'] ?? null,
+                    'db_fio' => $info['db_fio'] ?? null,
+                    'razr' => $info['razr'] ?? null,
+                    'q' => $info['q'] ?? (isset($info['razr']) ? q_from_razr($info['razr']) : null),
+                ];
+            };
             $out = [
                 'rank' => $pair['rank'],
                 'result' => $pair['result'],
-                'player1' => [
-                    'name' => $pair['name1'],
-                    'player_id' => $pair['id1'],
-                    'status' => $i1['status'] ?? null,
-                    'db_fio' => $i1['db_fio'] ?? null,
-                    'razr' => $i1['razr'] ?? null,
-                    'q' => $i1['q'] ?? (isset($i1['razr']) ? q_from_razr($i1['razr']) : null),
-                ],
-                'player2' => [
-                    'name' => $pair['name2'],
-                    'player_id' => $pair['id2'],
-                    'status' => $i2['status'] ?? null,
-                    'db_fio' => $i2['db_fio'] ?? null,
-                    'razr' => $i2['razr'] ?? null,
-                    'q' => $i2['q'] ?? (isset($i2['razr']) ? q_from_razr($i2['razr']) : null),
-                ],
+                'player1' => $mk($pair['name1'] ?? '', $pair['id1'] ?? null, $i1),
             ];
+            $name2 = trim((string)($pair['name2'] ?? ''));
+            $id2 = $pair['id2'] ?? null;
+            // индивидуал / пустой второй игрок — не создаём player2
+            if ($name2 !== '' || ($id2 !== null && $id2 !== '')) {
+                $p2key = $id2 !== null ? 'id:'.$id2 : 'name:'.normalize($name2);
+                $i2 = $playerInfo[$p2key] ?? null;
+                $out['player2'] = $mk($name2, $id2, $i2);
+            }
             if (!empty($pair['rank_tied'])) {
                 $out['rank_tied'] = true;
+            }
+            if (($pair['layout'] ?? '') === 'individual') {
+                $out['layout'] = 'individual';
             }
             return $out;
         };
@@ -1325,6 +1476,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 foreach ($playersOut as $po) {
                     $teamsOut[$ti]['non_counting'][] = $po;
+                    // убрать из основного состава, если там тот же игрок
+                    $pid = $po['player_id'] ?? null;
+                    $pname = normalize($po['name'] ?? '');
+                    $teamsOut[$ti]['players'] = array_values(array_filter(
+                        $teamsOut[$ti]['players'],
+                        function ($tp) use ($pid, $pname) {
+                            $tpid = $tp['player_id'] ?? null;
+                            if ($pid !== null && $pid !== '' && $tpid !== null && $tpid !== '' && (int)$tpid === (int)$pid) {
+                                return false;
+                            }
+                            if ($pid === null && $pname !== '' && normalize($tp['name'] ?? '') === $pname) {
+                                return false;
+                            }
+                            return true;
+                        }
+                    ));
                 }
             }
             if ($orphanNonCounting) {
@@ -1723,6 +1890,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         $jsonReport = [
+            'format' => $format,
             'meta' => $meta,
             'summary' => [
                 'players_total' => $total,
@@ -1745,7 +1913,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'sessions' => $sessionsOut,
         ];
 
-        }
+        } // end format team/pair
+        } // end non-club_mb else
     } catch (Throwable $e) {
         $error = $e->getMessage();
         if (isset($tmp) && is_file($tmp)) @unlink($tmp);
@@ -1782,8 +1951,8 @@ h1{font-size:1.4rem;margin:0 0 8px}
 
 <?php if ($results === null): ?>
 <div class="card">
-  <h1>Проверка отчёта турнира</h1>
-  <p class="sub">Сверка ID и имён с базой FSBR. Поддерживаются <b>.xls</b> и <b>.xlsx</b> (чистый PHP, без Python).</p>
+  <h1>Проверка отчёта</h1>
+  <p class="sub">Сверка ID и имён с базой FSBR. Подходят <b>турнирные протоколы</b> (пары / команды / индивидуал) и <b>клубные МБ</b> («Отчет по МБ…»). Файлы <b>.xls</b> и <b>.xlsx</b>.</p>
   <?php if ($error): ?><div class="flash"><?= h($error) ?></div><?php endif; ?>
   <form method="post" enctype="multipart/form-data">
     <label class="drop" id="drop">
@@ -1792,7 +1961,7 @@ h1{font-size:1.4rem;margin:0 0 8px}
     </label>
     <button class="btn" type="submit">Проверить</button>
   </form>
-  <p class="note">Форматы: .xls и .xlsx (отчёт FSBR с вкладками Sum и «Общая информация»).</p>
+  <p class="note">Турнир: вкладки Sum, «Общая информация», сессии. Клубные МБ: регион, период, id / игрок / МБ — дальше сразу SQL (без расчёта рейтинга).</p>
 </div>
 <script>
 const f=document.getElementById('file'),l=document.getElementById('label'),d=document.getElementById('drop');
@@ -1919,20 +2088,27 @@ d.ondragover=e=>e.preventDefault();d.ondrop=e=>{e.preventDefault();if(e.dataTran
   <?php
   // --- Отчёт о проверке сессий / этапов ---
   $sessionsCheck = $jsonReport['sessions'] ?? [];
-  if ($sessionsCheck): ?>
+  $isClubReport = !empty($clubMbMode) || (($jsonReport['format'] ?? '') === 'club_mb');
+  if ($sessionsCheck && !$isClubReport): ?>
   <section>
     <h2>Проверка сессий / этапов (<?= count($sessionsCheck) ?>)</h2>
     <?php foreach ($sessionsCheck as $sess):
       $spairs = $sess['pairs'] ?? [];
       $okN = 0;
       $iss = [];
+      $unitCount = 0;
       foreach ($spairs as $pair) {
         foreach (['player1', 'player2'] as $side) {
           $pl = $pair[$side] ?? null;
-          if (!$pl) continue;
+          if (!$pl || !is_array($pl)) continue;
+          $pname = trim((string)($pl['name'] ?? ''));
+          $pid = $pl['player_id'] ?? null;
+          // пустой слот (типично player2 у индивидуала) — пропускаем
+          if ($pname === '' && ($pid === null || $pid === '')) continue;
+          $unitCount++;
           $st = $pl['status'] ?? null;
           if ($st === null) {
-            if (($pl['player_id'] ?? null) === null || $pl['player_id'] === '') $st = 'no_id';
+            if ($pid === null || $pid === '') $st = 'no_id';
             else $st = 'ok';
           }
           if ($st === 'ok') {
@@ -1940,17 +2116,21 @@ d.ondragover=e=>e.preventDefault();d.ondrop=e=>{e.preventDefault();if(e.dataTran
           } else {
             $iss[] = [
               'rank' => $pair['rank'] ?? '',
-              'name' => $pl['name'] ?? '',
-              'id' => $pl['player_id'] ?? null,
+              'name' => $pname,
+              'id' => $pid,
               'db' => $pl['db_fio'] ?? '',
               'status' => $st,
             ];
           }
         }
       }
+      $isIndSess = !empty($spairs[0]['layout']) && $spairs[0]['layout'] === 'individual';
+      if (!$isIndSess && isset($spairs[0]) && empty($spairs[0]['player2'])) {
+        $isIndSess = true;
+      }
     ?>
     <h3 style="margin:16px 0 8px;font-size:1rem"><?= h($sess['name'] ?? 'Этап') ?>
-      · пар: <?= count($spairs) ?>
+      · <?= $isIndSess ? 'игроков' : 'пар' ?>: <?= count($spairs) ?>
       <?php if (!empty($sess['boards'])): ?> · сдач: <?= (int)$sess['boards'] ?><?php endif; ?>
       · OK: <?= (int)$okN ?> · проблем: <?= count($iss) ?>
     </h3>
@@ -1995,7 +2175,9 @@ d.ondragover=e=>e.preventDefault();d.ondrop=e=>{e.preventDefault();if(e.dataTran
     ['unknown_id', 'ID нет в базе', ['Место','ID','Имя','Партнёр','Возможные ID'], fn($p)=>[$p['rank']??'—',$p['player_id']??'',$p['name']??'',$p['partner']??'—', $fmtSugg($p)]],
     ['name_mismatch', 'Несовпадение имени', ['Место','ID','В отчёте','В базе'], fn($p)=>[$p['rank']??'—',$p['player_id']??'',$p['name']??'',$p['db_fio']??'']],
   ];
+  $isClubReport = !empty($clubMbMode) || (($jsonReport['format'] ?? '') === 'club_mb');
   foreach ($blocks as [$key,$title,$headers,$fn]):
+    if ($isClubReport) continue; // у клубных свой отчёт с МБ
     if (empty($results[$key])) continue; ?>
   <section>
     <h2><?= h($title) ?> (<?= count($results[$key]) ?>)</h2>
@@ -2024,6 +2206,7 @@ d.ondragover=e=>e.preventDefault();d.ondrop=e=>{e.preventDefault();if(e.dataTran
   </section>
   <?php endif; ?>
 
+  <?php if (empty($clubMbMode) && (($jsonReport['format'] ?? '') !== 'club_mb')): ?>
   <section>
     <h2>Участники (<?= count($results['json_players'] ?? []) ?>)</h2>
     <table>
@@ -2054,8 +2237,9 @@ d.ondragover=e=>e.preventDefault();d.ondrop=e=>{e.preventDefault();if(e.dataTran
       <?php endforeach; ?>
     </table>
   </section>
+  <?php endif; /* not club_mb participants */ ?>
 
-<?php if (!empty($results['city_stats'])): ?>
+<?php if (!empty($results['city_stats']) && empty($clubMbMode) && (($jsonReport['format'] ?? '') !== 'club_mb')): ?>
   <section>
     <h2>Статистика по городам</h2>
     <table>
@@ -2070,7 +2254,7 @@ d.ondragover=e=>e.preventDefault();d.ondrop=e=>{e.preventDefault();if(e.dataTran
   </section>
   <?php endif; ?>
 
-  <?php if ($results['judges_issues']): ?>
+  <?php if (false && $results['judges_issues']): ?>
   <section>
     <h2>Судьи — проблемы</h2>
     <table>
@@ -2091,23 +2275,79 @@ d.ondragover=e=>e.preventDefault();d.ondrop=e=>{e.preventDefault();if(e.dataTran
   </section>
   <?php endif; ?>
 
-  <?php if ($results['judges_ok']): ?>
-<?php endif; ?>
-
+  <?php if (!empty($results['judges_ok']) && empty($clubMbMode) && (($jsonReport['format'] ?? '') !== 'club_mb')): ?>
   <section>
-    <h2>OK (<?= count($results['ok']) ?>)</h2>
+    <h2>Судьи (<?= count($results['judges_ok']) + count($results['judges_issues'] ?? []) ?>)</h2>
     <table>
-      <tr><th>Место</th><th>ID</th><th>В отчёте</th><th>В базе</th></tr>
-      <?php foreach ($results['ok'] as $p): ?>
+      <tr><th>ID</th><th>В отчёте</th><th>Позиция</th><th>В базе</th><th>Статус</th></tr>
+      <?php foreach ($results['judges_ok'] as $j): ?>
       <tr>
-        <td><?= h((string)($p['rank'] ?? '—')) ?></td>
-        <td><?= h((string)$p['player_id']) ?></td>
-        <td><?= h($p['name'] ?? '') ?></td>
-        <td><?= h($p['db_fio'] ?? '') ?></td>
+        <td><?= h((string)($j['player_id'] ?? '—')) ?></td>
+        <td><?= h($j['name'] ?? '') ?></td>
+        <td><?= h($j['role'] ?? '') ?></td>
+        <td><?= h($j['db_fio'] ?? '—') ?></td>
+        <td><span class="badge" style="background:rgba(34,197,94,.15);color:var(--ok)">OK</span></td>
+      </tr>
+      <?php endforeach; ?>
+      <?php foreach ($results['judges_issues'] as $j): ?>
+      <tr>
+        <td><?= h((string)($j['player_id'] ?? '—')) ?></td>
+        <td><?= h($j['name'] ?? '') ?></td>
+        <td><?= h($j['role'] ?? '') ?></td>
+        <td><?= h($j['db_fio'] ?? '—') ?></td>
+        <td><?php
+          $iss=$j['issue']??'';
+          echo $iss==='no_id'?'<span class="badge badge-warn">нет ID</span>':($iss==='unknown_id'?'<span class="badge badge-err">ID нет в базе</span>':'<span class="badge badge-err">имя ≠ база</span>');
+        ?></td>
       </tr>
       <?php endforeach; ?>
     </table>
   </section>
+  <?php elseif (!empty($results['judges_issues']) && empty($clubMbMode)): ?>
+  <?php /* problems already listed above as «Судьи — проблемы» */ ?>
+  <?php endif; ?>
+
+  <?php if (!empty($clubMbMode) || (($jsonReport['format'] ?? '') === 'club_mb')): ?>
+  <section>
+    <h2>Клубные МБ — игроки (<?= (int)count($jsonReport['players'] ?? $results['ok'] ?? []) ?>)</h2>
+    <p class="sub">
+      Регион: <b><?= h($jsonReport['meta']['region'] ?? $meta['region'] ?? '—') ?></b>
+      · период: <?= h(($jsonReport['meta']['date_from'] ?? '?') . ' — ' . ($jsonReport['meta']['date_to'] ?? '?')) ?>
+      <?php if (!empty($jsonReport['city']['city_name'])): ?>
+        · город: <b><?= h($jsonReport['city']['city_name']) ?></b>
+      <?php endif; ?>
+      · сумма МБ: <b><?= h((string)($jsonReport['summary']['sum_mb'] ?? '')) ?></b>
+    </p>
+    <table>
+      <tr><th>#</th><th>ID</th><th>В отчёте</th><th>МБ</th><th>В базе</th><th>Город</th><th>Статус</th></tr>
+      <?php
+        $clubPlayers = $jsonReport['players'] ?? [];
+        usort($clubPlayers, function ($a, $b) {
+            return ((float)($b['mb'] ?? 0)) <=> ((float)($a['mb'] ?? 0));
+        });
+        foreach ($clubPlayers as $i => $p):
+          $st = $p['status'] ?? '';
+      ?>
+      <tr>
+        <td><?= (int)($p['n'] ?? $i + 1) ?></td>
+        <td><?= h((string)($p['player_id'] ?? '—')) ?></td>
+        <td><?= h($p['name'] ?? '') ?></td>
+        <td><b><?= h((string)($p['mb'] ?? '0')) ?></b></td>
+        <td><?= h($p['db_fio'] ?? '—') ?></td>
+        <td><?= h($p['city'] ?? '—') ?></td>
+        <td><?php
+          if ($st === 'ok') echo '<span class="badge badge-ok">OK</span>';
+          elseif ($st === 'name_mismatch') echo '<span class="badge badge-warn">имя ≠ база</span>';
+          elseif ($st === 'unknown_id') echo '<span class="badge badge-err">ID нет в базе</span>';
+          elseif ($st === 'no_id') echo '<span class="badge badge-warn">нет ID</span>';
+          else echo h($st);
+          if (!empty($p['status_warn'])) echo ' <span class="badge badge-warn">' . h($p['status_warn']) . '</span>';
+        ?></td>
+      </tr>
+      <?php endforeach; ?>
+    </table>
+  </section>
+  <?php endif; /* club players table */ ?>
 </div>
 <?php endif; ?>
 
@@ -2122,6 +2362,43 @@ d.ondragover=e=>e.preventDefault();d.ondrop=e=>{e.preventDefault();if(e.dataTran
 endif; ?>
 <?php if (!empty($jsonReport)): ?>
 <section>
+  <?php if (($jsonReport['format'] ?? '') === 'club_mb'): ?>
+  <h2>Клубные МБ — расчёт не нужен</h2>
+  <p class="sub">Формат type=5: только проверка игроков и SQL. Этап расчёта РО/ПБ/МБ пропускается.</p>
+  <?php if (!empty($jsonReport['city']['city_name'])): ?>
+  <p class="sub">Город: <b><?= h($jsonReport['city']['city_name']) ?></b> (id <?= (int)$jsonReport['city']['city_id'] ?>)
+    · сумма МБ: <b><?= h((string)($jsonReport['summary']['sum_mb'] ?? '')) ?></b>
+  </p>
+  <?php endif; ?>
+  <?php if (!empty($jsonReport['city_error'])): ?>
+  <div class="flash"><?= h($jsonReport['city_error']) ?></div>
+  <form method="post" enctype="multipart/form-data">
+    <input type="hidden" name="tab" value="check">
+    <label>Город</label>
+    <select name="city_id" style="width:100%;max-width:400px;padding:8px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:var(--text)">
+      <option value="">— выберите —</option>
+      <?php
+        $dbC = cmb_db();
+        $cities = $dbC ? cmb_load_cities($dbC) : [];
+        if ($dbC) $dbC->close();
+        foreach ($cities as $c):
+      ?>
+      <option value="<?= (int)$c['city_id'] ?>"><?= h($c['city_name']) ?></option>
+      <?php endforeach; ?>
+    </select>
+    <p class="note">Загрузите тот же файл снова с выбранным городом.</p>
+    <input type="file" name="file" accept=".xls,.xlsx" required>
+    <input type="hidden" name="tourn_id" value="<?= h($_POST['tourn_id'] ?? '') ?>">
+    <button class="btn" type="submit">Проверить снова</button>
+  </form>
+  <?php elseif (!empty($jsonReport['sql'])): ?>
+  <form method="post" action="?tab=sql">
+    <input type="hidden" name="tab" value="sql">
+    <input type="hidden" name="from_club_mb" value="1">
+    <button class="btn btn-next" type="submit">Перейти к SQL →</button>
+  </form>
+  <?php endif; ?>
+  <?php else: ?>
   <h2>Дальше: расчёт рейтинга</h2>
   <p class="sub">JSON проверки можно передать на шаг расчёта РО / ПБ / МБ.</p>
   <form method="post" action="?tab=rating">
@@ -2129,5 +2406,6 @@ endif; ?>
     <input type="hidden" name="from_check_json" value="<?= h(json_encode($jsonReport, JSON_UNESCAPED_UNICODE)) ?>">
     <button class="btn btn-next" type="submit">Перейти к расчёту →</button>
   </form>
+  <?php endif; ?>
 </section>
 <?php endif; ?>
