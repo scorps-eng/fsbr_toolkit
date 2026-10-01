@@ -221,14 +221,52 @@ function col_letter_to_index(string $cell): int {
 }
 
 /** @return list<list<string|null>> rows of cells */
-function xlsx_read_sheet(ZipArchive $zip, string $sheetPath, array $shared): array {
+/** Скрытые строки со значениями, найденные при чтении (для предупреждения). */
+function hidden_note(string $sheet, array $row): void
+{
+    $vals = array_values(array_filter(array_map(fn($v) => trim((string)$v), $row), fn($v) => $v !== ''));
+    $GLOBALS['fsbr_hidden_notes'][$sheet][] = implode(' | ', array_slice($vals, 0, 4));
+}
+
+/** Предупреждения о скрытых строках со значениями (они не учитываются). */
+function hidden_warnings(): array
+{
+    $out = [];
+    foreach ($GLOBALS['fsbr_hidden_notes'] ?? [] as $sheet => $samples) {
+        $out[] = [
+            'code' => 'hidden_rows',
+            'message' => 'Лист «' . $sheet . '»: есть скрытые строки со значениями — они НЕ учтены (проверьте, что так и задумано). Например: '
+                . implode('; ', array_map(fn($x) => '«' . $x . '»', array_slice($samples, 0, 3))),
+            'count' => count($samples),
+        ];
+    }
+    return $out;
+}
+
+function xlsx_read_sheet(ZipArchive $zip, string $sheetPath, array $shared, string $label = ''): array {
     $xml = $zip->getFromName($sheetPath);
     if ($xml === false) return [];
     $ss = @simplexml_load_string($xml);
     if (!$ss) return [];
     $rows = [];
+    $skipped = 0;
     foreach ($ss->sheetData->row as $row) {
-        $rIdx = (int)$row['r'] - 1;
+        $hv = strtolower((string)$row['hidden']);
+        if ($hv === '1' || $hv === 'true') {
+            // скрытая строка не учитывается; если в ней есть значения — запоминаем для предупреждения
+            $skipped++;
+            $hidRow = [];
+            foreach ($row->c as $c) {
+                $t = (string)($c['t'] ?? '');
+                $v = ($t === 's') ? ($shared[(int)($c->v ?? 0)] ?? '') : (($t === 'inlineStr') ? (string)($c->is->t ?? '') : (isset($c->v) ? (string)$c->v : ''));
+                $hidRow[] = $v;
+            }
+            if (array_filter($hidRow, fn($v) => trim((string)$v) !== '')) {
+                hidden_note($label !== '' ? $label : $sheetPath, $hidRow);
+            }
+            continue;
+        }
+        $rIdx = (int)$row['r'] - 1 - $skipped;
         while (count($rows) <= $rIdx) {
             $rows[] = [];
         }
@@ -648,7 +686,7 @@ function parse_xlsx(string $path): array
     $allPlayers = [];
 
     foreach ($sheets as $name => $pathSheet) {
-        $rows = xlsx_read_sheet($zip, $pathSheet, $shared);
+        $rows = xlsx_read_sheet($zip, $pathSheet, $shared, (string)$name);
         if (mb_stripos($name, 'Общая') !== false || mb_stripos($name, 'General') !== false) {
             $meta = array_merge($meta, extract_meta_from_rows($rows));
             foreach ($rows as $row) {
@@ -821,7 +859,10 @@ function parse_xls_native(string $path): array
     $teamMode = is_team_report($names);
 
     foreach ($names as $name) {
-        $rows = $xls->readSheet($name);
+        $rows = $xls->readSheet($name, true, false); // скрытые строки не учитываем
+        foreach ($xls->hiddenDataRows($name) as $hr) {
+            hidden_note((string)$name, $hr);
+        }
         if (mb_stripos($name, 'Общая') !== false || mb_stripos($name, 'General') !== false) {
             $meta = array_merge($meta, extract_meta_from_rows($rows));
             foreach ($rows as $row) {
@@ -914,6 +955,7 @@ function parse_xls_native(string $path): array
 
 function parse_report(string $path, string $origName): array
 {
+    $GLOBALS['fsbr_hidden_notes'] = [];
     $ext = strtolower(pathinfo($origName, PATHINFO_EXTENSION));
     if ($ext === 'xls') {
         return parse_xls_native($path);
@@ -1314,7 +1356,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $sessionsOut = [];
         $teamsOut = [];
         $nonCountingOut = [];
-        $warnings = [];
+        $warnings = hidden_warnings();
 
         $lookupPlayer = function ($id, $name) use ($playerInfo) {
             $key = $id !== null ? 'id:'.$id : 'name:'.normalize($name ?? '');
@@ -1581,7 +1623,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ];
         }
 
-        $warnings = [];
+        $warnings = hidden_warnings();
 
         // Sum: rank "=" недопустим
         $sumTied = [];

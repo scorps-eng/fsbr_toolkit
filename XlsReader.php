@@ -6,6 +6,8 @@
 class XlsReader
 {
     private string $data = '';
+    /** @var array<string,list<list<mixed>>> */
+    private array $hiddenData = [];
     private array $sheets = []; // name => ['offset'=>, 'rows'=>]
     private array $sst = [];
     private ?array $pendingFormula = null; // [sheet, row, col] waiting for STRING
@@ -31,7 +33,17 @@ class XlsReader
     }
 
     /** @return list<list<string|float|int|null>> */
-    public function readSheet(string $name, bool $skipHidden = false): array
+    /** Скрытые строки листа, в которых были значения (заполняется readSheet(..., true)). @return list<list<mixed>> */
+    public function hiddenDataRows(string $name): array
+    {
+        return $this->hiddenData[$name] ?? [];
+    }
+
+    /**
+     * @param bool $skipHidden отбросить скрытые строки
+     * @param bool $nullHiddenCols обнулить ячейки скрытых столбцов (при $skipHidden)
+     */
+    public function readSheet(string $name, bool $skipHidden = false, bool $nullHiddenCols = true): array
     {
         if (!isset($this->sheets[$name])) {
             return [];
@@ -44,11 +56,15 @@ class XlsReader
         $hr = $this->sheets[$name]['hidRows'] ?? [];
         $hc = $this->sheets[$name]['hidCols'] ?? [];
         $out = [];
+        $this->hiddenData[$name] = [];
         foreach ($rows as $i => $r) {
             if (isset($hr[$i])) {
+                if (array_filter($r, fn($v) => $v !== null && trim((string)$v) !== '')) {
+                    $this->hiddenData[$name][] = $r;
+                }
                 continue;
             }
-            foreach ($hc as $c => $_) {
+            foreach ($nullHiddenCols ? $hc : [] as $c => $_) {
                 if (array_key_exists($c, $r)) {
                     $r[$c] = null;
                 }
