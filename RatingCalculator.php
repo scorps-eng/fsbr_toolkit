@@ -255,8 +255,7 @@ class RatingCalculator
             && $this->N < $minN) {
             $this->belowMin = true;
             $warnings[] = "В квалификационном списке {$this->N} участн. — меньше минимума {$minN} (п. 8.5): "
-                . 'турнир не может быть рейтинговым, РО/ПБ начислять не следует'
-                . ($this->guaranteedKey !== 'none' ? '; гарантированные ПБ не применены.' : '.');
+                . 'турнир не рейтинговый: РО и ПБ не начисляются (МБ считаются).';
         }
 
         $dq = ($this->format === 'team') ? 88.0 : 66.0;
@@ -291,6 +290,14 @@ class RatingCalculator
             } else {
                 $this->RCM = $this->RC;
             }
+        }
+
+        // п. 8.5: женский / юниорский ЧР с числом участников ниже минимума — рейтинговые, RC = 1 / 0.5
+        $fixedRc = false;
+        if (!$nonRating && $this->N < $minN && in_array($this->guaranteedKey, ['ru_women_pair', 'ru_junior'], true)) {
+            $this->RC = $this->RCM = ($this->guaranteedKey === 'ru_women_pair') ? 1.0 : 0.5;
+            $fixedRc = true;
+            $warnings[] = "Участников меньше {$minN}: по п. 8.5 RC принят равным " . $this->RC . '.';
         }
 
         // pR
@@ -332,7 +339,7 @@ class RatingCalculator
         $rcBoosted = false;
         // Гарантированные ПБ: если RC/RCM не дают нужный ПБ1 — RC := ПБ1 − 0.5
         $gPb1 = $nonRating ? 0 : $this->guaranteedPbForPlace(1);
-        if ($gPb1 > 0 && $this->PB1 < $gPb1) {
+        if ($gPb1 > 0 && $this->PB1 < $gPb1 && !$fixedRc) {
             // RC := ПБ1_гарант − 0.5 (п. 8.10)
             $this->RC = $gPb1 - 0.5;
             // пересчёт pR и RCM-зависимых
@@ -427,6 +434,12 @@ class RatingCalculator
             $mb = (int)self::roundHalfUp($mbSum / max(1, count($places)));
             if ($mb < 0) {
                 $mb = 0;
+            }
+
+            if ($this->belowMin) {
+                // п. 8.5: турнир не рейтинговый — РО и ПБ не начисляются (МБ остаются)
+                $ro = 0;
+                $pb = 0;
             }
 
             $results[] = [
