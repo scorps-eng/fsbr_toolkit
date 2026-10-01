@@ -145,6 +145,27 @@ public static function sqlNull($v): string
     }
 
     /**
+     * Строки SQL, берущие advisory-lock на выдачу tourn_id (до конца соединения, т.е. после COMMIT).
+     * Без этого два одновременных импорта получают одинаковый MAX(tourn_id)+1.
+     * Если lock не получен за 30 с — продолжаем как раньше (худший случай — конфликт PK и ROLLBACK, данные не портятся).
+     * @return string[]
+     */
+    public static function lockLines(): array
+    {
+        return [
+            "SET @lk = GET_LOCK('fsbr_tourn_id', 30);",
+        ];
+    }
+
+    /** SET @tourn_id = следующий свободный номер (под lock). @return string[] */
+    public static function allocTournIdLines(): array
+    {
+        return array_merge(self::lockLines(), [
+            'SET @tourn_id = (SELECT IFNULL(MAX(tourn_id), 0) + 1 FROM tourn_header);',
+        ]);
+    }
+
+    /**
      * Проверка перед перезаписью. $allowMissing=true — tourn_id можно как новый.
      * @return array{exists:bool,header:?array,preview:string}
      */
@@ -272,7 +293,9 @@ public static function sqlNull($v): string
             $lines[] = "DELETE FROM tourn_header WHERE tourn_id = {$tidSql} AND type = {$type};";
             $lines[] = '';
         } else {
-            $lines[] = 'SET @tourn_id = (SELECT IFNULL(MAX(tourn_id), 0) + 1 FROM tourn_header);';
+            foreach (self::allocTournIdLines() as $ln) {
+                $lines[] = $ln;
+            }
             $tidSql = '@tourn_id';
         }
 
@@ -402,6 +425,9 @@ public static function sqlNull($v): string
         if ($sessions && ($format === 'pair' || $format === 'individual')) {
                 $lines[] = "DELETE FROM tourn_ses WHERE main_tour_id = {$tidSql};";
             $lines[] = "DELETE FROM tourn_header WHERE parent = {$tidSql} AND type = 4;";
+            foreach (self::lockLines() as $ln) {
+                $lines[] = $ln;
+            }
             $lines[] = 'SET @sess_id = (SELECT IFNULL(MAX(tourn_id), 0) FROM tourn_header);';
             foreach ($sessions as $sr) {
                 if (!empty($sr['error'])) {

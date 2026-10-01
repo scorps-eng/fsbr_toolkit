@@ -347,10 +347,16 @@ class TournamentSuggest
         $reason = [];
         $key = 'none';
 
-        $isWomen = (bool)preg_match('/женск|women|ladies/ui', $t);
+        $isWomen = (bool)preg_match('/женск|женщин|women|ladies/ui', $t);
         $isMixed = (bool)preg_match('/микст|mixed|mix\b/ui', $t);
         $isJunior = (bool)preg_match('/юниор|junior|молод[её]ж|school|школьн/ui', $t);
         $isCup = (bool)preg_match('/кубок\s+росси|cup\s+of\s+russia/ui', $t);
+        $isOpen = (bool)preg_match('/открыт|\bopen\b/ui', $t);
+        $isPlayoff = (bool)preg_match('/плей-?офф|play-?off/ui', $t);
+        $isRosenblum = (bool)preg_match('/розенблюм|rosenblum/ui', $t);
+        $isMcConnell = (bool)preg_match('/макконн?ел+|mc ?connell/ui', $t);
+        $isOlympiad = (bool)preg_match('/олимпиад|olympiad/ui', $t);
+        $isChampCup = (bool)preg_match('/кубок\s+европейск\w*\s+чемпион|european\s+champions.{0,3}\s+cup|champions.{0,3}\s+cup/ui', $t);
         $isBermuda = (bool)preg_match('/бермуд|bermuda/ui', $t);
         $isVenice = (bool)preg_match('/венеци|venice/ui', $t);
         $isWorld = (bool)preg_match('/\bчм\b|чемпионат\s+мира|world\s+champ/ui', $t);
@@ -360,7 +366,19 @@ class TournamentSuggest
         $isRegional = (bool)preg_match('/региональн|\bрч\b|областн|краев/ui', $t)
             || $status === 'regional';
 
-        if ($isBermuda) {
+        if ($isRosenblum) {
+            $key = 'w_rosenblum';
+            $reason[] = 'Кубок Розенблюма';
+        } elseif ($isMcConnell) {
+            $key = 'w_mcconnell';
+            $reason[] = 'Кубок Макконелл';
+        } elseif ($isOlympiad) {
+            $key = $isWomen ? 'olympiad_women' : 'olympiad_open';
+            $reason[] = 'Олимпиада';
+        } elseif ($isChampCup) {
+            $key = 'eu_champions_cup';
+            $reason[] = 'Кубок Европейских Чемпионов';
+        } elseif ($isBermuda) {
             $key = 'w_bermuda';
             $reason[] = 'Бермудский кубок';
         } elseif ($isVenice) {
@@ -370,6 +388,15 @@ class TournamentSuggest
             if ($isJunior) {
                 $key = 'w_junior';
                 $reason[] = 'ЧМ юниоры';
+            } elseif ($isMixed && $isTeam) {
+                $key = $isPlayoff ? 'w_mixed_team_po' : 'w_mixed_team';
+                $reason[] = 'ЧМ микст командный' . ($isPlayoff ? ' (с плей-офф)' : ' (без плей-офф)');
+            } elseif ($isMixed && $isPair) {
+                $key = 'w_mixed_pair';
+                $reason[] = 'ЧМ микст парный';
+            } elseif ($isWomen && $isPair) {
+                $key = 'w_women_pair';
+                $reason[] = 'ЧМ женский парный';
             } elseif ($isPair) {
                 $key = 'w_pair';
                 $reason[] = 'ЧМ парный';
@@ -380,6 +407,10 @@ class TournamentSuggest
         } elseif ($isEuro) {
             if ($isJunior) {
                 $key = 'eu_junior';
+            } elseif ($isOpen && $isTeam && $isWomen) {
+                $key = 'eu_open_women_team';
+            } elseif ($isOpen && $isTeam) {
+                $key = 'eu_open_team';
             } elseif ($isMixed && $isTeam) {
                 $key = 'eu_mixed_team';
             } elseif ($isMixed && $isPair) {
@@ -423,7 +454,7 @@ class TournamentSuggest
 
         $label = RatingCalculator::GUARANTEED_PB_LABELS[$key] ?? $key;
         $confidence = $key === 'none' ? 'low' : (count($reason) ? 'medium' : 'low');
-        if (preg_match('/чемпионат\s+росси|бермуд|венеци|кубок\s+росси/ui', $t)) {
+        if (preg_match('/чемпионат\s+росси|бермуд|венеци|кубок\s+росси|розенблюм|макконн|олимпиад/ui', $t)) {
             $confidence = 'high';
         }
 

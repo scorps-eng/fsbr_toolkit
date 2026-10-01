@@ -4,6 +4,7 @@ declare(strict_types=1);
  * Клубные МБ: разбор отчёта, проверка игроков, SQL type=5.
  */
 require_once __DIR__ . '/names.php';
+require_once __DIR__ . '/SqlExporter.php';
 require_once __DIR__ . '/XlsReader.php';
 require_once __DIR__ . '/bootstrap.php';
 
@@ -627,7 +628,9 @@ function cmb_build_sql(array $meta, array $validated, ?int $cityId = null, ?int 
         $lines[] = '';
         $tidSql = $tid;
     } else {
-        $lines[] = 'SET @tourn_id = (SELECT IFNULL(MAX(tourn_id), 0) + 1 FROM tourn_header);';
+        foreach (SqlExporter::allocTournIdLines() as $ln) {
+            $lines[] = $ln;
+        }
         $tidSql = '@tourn_id';
     }
 

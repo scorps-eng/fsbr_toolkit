@@ -15,6 +15,47 @@ require_once __DIR__ . '/RatingCalculator.php';
 require_once __DIR__ . '/TournamentSuggest.php';
 require_once __DIR__ . '/SqlExporter.php';
 
+/** Строка игрока для таблицы результатов (единый вид для основного расчёта и сессий). */
+function rb_player_row(array $pl, float $q): array
+{
+    return [
+        'name' => $pl['name'] ?? '',
+        'player_id' => $pl['player_id'] ?? ($pl['id'] ?? null),
+        'razr' => $pl['razr'] ?? null,
+        'q' => $q,
+        'db_fio' => $pl['db_fio'] ?? null,
+    ];
+}
+
+/**
+ * Добавить в калькулятор одну запись пары/индивидуала (формат check-JSON: player1/player2 или плоский name1/id1/razr1).
+ * Используется и для основного расчёта, и для расчёта сессий.
+ */
+function rb_add_pair_entry(RatingCalculator $calc, array $pair, string $format): void
+{
+    $rank = (int)($pair['rank'] ?? 0);
+    if ($rank < 1) {
+        return;
+    }
+    $p1 = $pair['player1'] ?? [];
+    $p2 = $pair['player2'] ?? [];
+    if (!$p1 && isset($pair['name1'])) {
+        $p1 = ['name' => $pair['name1'] ?? '', 'player_id' => $pair['id1'] ?? null, 'razr' => $pair['razr1'] ?? null];
+        $p2 = ['name' => $pair['name2'] ?? '', 'player_id' => $pair['id2'] ?? null, 'razr' => $pair['razr2'] ?? null];
+    } elseif (!$p1 && $format === 'individual' && !empty($pair['name'])) {
+        $p1 = $pair;
+    }
+    $res = (isset($pair['result']) && is_numeric($pair['result'])) ? (0 + $pair['result']) : null;
+    $q1 = q_from_player_fields($p1);
+    if ($format === 'individual') {
+        $calc->addEntry($rank, $q1, trim((string)($p1['name'] ?? '')), [rb_player_row($p1, $q1)], $res);
+        return;
+    }
+    $q2 = q_from_player_fields($p2);
+    $label = trim(($p1['name'] ?? '') . ' — ' . ($p2['name'] ?? ''));
+    $calc->addEntry($rank, ($q1 + $q2) / 2.0, $label, [rb_player_row($p1, $q1), rb_player_row($p2, $q2)], $res);
+}
+
 
 function normalize_team(string $s): string {
     $s = mb_strtolower(trim($s), 'UTF-8');
@@ -82,7 +123,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $calc = new RatingCalculator($format, $status, $d, $guaranteed);
 
         if ($format === 'team') {
-            $calc = new RatingCalculator('team', $status, $d, $guaranteed);
             foreach ($data['teams'] ?? [] as $tm) {
                 $rank = (int)($tm['rank'] ?? 0);
                 if ($rank < 1) continue;
@@ -107,39 +147,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $res = (isset($tm['result']) && is_numeric($tm['result'])) ? (0 + $tm['result']) : null;
                 $calc->addEntry($rank, $qAvg, $label, $plist, $res);
             }
-        } elseif ($format === 'individual') {
-            $pairs = $data['sum']['pairs'] ?? [];
-            foreach ($pairs as $pair) {
-                $rank = (int)($pair['rank'] ?? 0);
-                if ($rank < 1) continue;
-                $p1 = $pair['player1'] ?? [];
-                if (!$p1 && !empty($pair['name'])) {
-                    $p1 = $pair;
-                }
-                $q1 = q_from_player_fields($p1);
-                $label = trim((string)($p1['name'] ?? ''));
-                $res = (isset($pair['result']) && is_numeric($pair['result'])) ? (0 + $pair['result']) : null;
-                $calc->addEntry($rank, $q1, $label, [
-                    ['name' => $p1['name'] ?? '', 'player_id' => $p1['player_id'] ?? null, 'razr' => $p1['razr'] ?? null, 'q' => $q1, 'db_fio' => $p1['db_fio'] ?? null],
-                ], $res);
-            }
         } else {
-            // pair: from sum.pairs
-            $pairs = $data['sum']['pairs'] ?? [];
-            foreach ($pairs as $pair) {
-                $rank = (int)($pair['rank'] ?? 0);
-                if ($rank < 1) continue;
-                $p1 = $pair['player1'] ?? [];
-                $p2 = $pair['player2'] ?? [];
-                $q1 = q_from_player_fields($p1);
-                $q2 = q_from_player_fields($p2);
-                $qAvg = ($q1 + $q2) / 2.0;
-                $label = trim(($p1['name'] ?? '') . ' — ' . ($p2['name'] ?? ''));
-                $res = (isset($pair['result']) && is_numeric($pair['result'])) ? (0 + $pair['result']) : null;
-                $calc->addEntry($rank, $qAvg, $label, [
-                    ['name' => $p1['name'] ?? '', 'player_id' => $p1['player_id'] ?? null, 'razr' => $p1['razr'] ?? null, 'q' => $q1, 'db_fio' => $p1['db_fio'] ?? null],
-                    ['name' => $p2['name'] ?? '', 'player_id' => $p2['player_id'] ?? null, 'razr' => $p2['razr'] ?? null, 'q' => $q2, 'db_fio' => $p2['db_fio'] ?? null],
-                ], $res);
+            // pair / individual: from sum.pairs
+            foreach ($data['sum']['pairs'] ?? [] as $pair) {
+                rb_add_pair_entry($calc, $pair, $format);
             }
         }
 
@@ -179,11 +190,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         foreach ($sessList as $sess) {
             $sessName = $sess['name'] ?? 'Сессия';
             $sessD = null;
+            $sessEstimated = false;
             if (isset($sess['boards']) && is_numeric($sess['boards']) && (float)$sess['boards'] > 0) {
                 $sessD = (float)$sess['boards'];
             } elseif ($metaD !== null && $metaD > 0) {
                 // оценка: делим длину турнира на число этапов
                 $sessD = max(1.0, round($metaD / $nSess, 1));
+                $sessEstimated = true;
             }
             if ($sessD === null || $sessD <= 0) {
                 $sessionResults[] = [
@@ -207,31 +220,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $sc = new RatingCalculator($format, $status, $sessD, 'none');
             $pairs = $sess['pairs'] ?? [];
             foreach ($pairs as $pair) {
-                $rank = (int)($pair['rank'] ?? 0);
-                if ($rank < 1) continue;
-                $p1 = $pair['player1'] ?? [];
-                $p2 = $pair['player2'] ?? [];
-                // fallback flat structure from check JSON
-                if (!$p1 && isset($pair['name1'])) {
-                    $p1 = ['name' => $pair['name1'] ?? '', 'player_id' => $pair['id1'] ?? null, 'razr' => $pair['razr1'] ?? null];
-                    $p2 = ['name' => $pair['name2'] ?? '', 'player_id' => $pair['id2'] ?? null, 'razr' => $pair['razr2'] ?? null];
-                }
-                $q1 = q_from_player_fields($p1);
-                $sessRes = (isset($pair['result']) && is_numeric($pair['result'])) ? (0 + $pair['result']) : null;
-                if ($format === 'individual') {
-                    $label = trim((string)($p1['name'] ?? ''));
-                    $sc->addEntry($rank, $q1, $label, [
-                        ['name' => $p1['name'] ?? '', 'player_id' => $p1['player_id'] ?? ($p1['id'] ?? null), 'razr' => $p1['razr'] ?? null, 'q' => $q1],
-                    ], $sessRes);
-                } else {
-                    $q2 = q_from_player_fields($p2);
-                    $qAvg = ($q1 + $q2) / 2.0;
-                    $label = trim(($p1['name'] ?? '') . ' — ' . ($p2['name'] ?? ''));
-                    $sc->addEntry($rank, $qAvg, $label, [
-                        ['name' => $p1['name'] ?? '', 'player_id' => $p1['player_id'] ?? ($p1['id'] ?? null), 'razr' => $p1['razr'] ?? null, 'q' => $q1],
-                        ['name' => $p2['name'] ?? '', 'player_id' => $p2['player_id'] ?? ($p2['id'] ?? null), 'razr' => $p2['razr'] ?? null, 'q' => $q2],
-                    ], $sessRes);
-                }
+                rb_add_pair_entry($sc, $pair, $format);
             }
             if (count($sc->entries) < 1) {
                 continue;
@@ -242,6 +231,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $sessionResults[] = [
                     'name' => $sessName,
                     'boards' => $sessD,
+                    'estimated' => $sessEstimated,
                     'params' => $sessOut['params'],
                     'results' => $sessOut['results'],
                 ];
@@ -516,6 +506,10 @@ h1{font-size:1.35rem;margin:0 0 8px}
     <h3 style="margin:0 0 10px;font-size:1.05rem"><?= h($sr['name'] ?? 'Этап') ?>
       <?php if (!empty($sr['boards'])): ?> · d=<?= h((string)$sr['boards']) ?><?php endif; ?>
     </h3>
+    <?php if (!empty($sr['estimated'])): ?>
+      <p class="flash">Длина сессии не указана в файле — взята оценка: длина турнира ÷ число сессий = <?= h((string)$sr['boards']) ?> сдач.
+        Если сессии разной длины, МБ будут посчитаны неверно: укажите <code>boards</code> для каждой сессии.</p>
+    <?php endif; ?>
     <?php if (!empty($sr['error'])): ?>
       <p class="flash"><?= h($sr['error']) ?></p>
     <?php else: ?>

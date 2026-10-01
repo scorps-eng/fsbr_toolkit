@@ -62,7 +62,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'search') {
         }
     }
     $sql = "SELECT p.player_id, p.firstname AS family_name, p.lastname AS given_name, p.surname AS patronymic,
-                   p.sex, p.phone, p.mail, p.city_id, c.city_name, p.club_id,
+                   p.sex, p.city_id, c.city_name, p.club_id,
                    cl.name AS club_name, p.razr, p.state
             FROM players p
             LEFT JOIN cities c ON c.city_id = p.city_id
@@ -100,8 +100,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'search') {
             'patronymic' => $row['patronymic'],
             'sex' => $row['sex'] !== null ? (int)$row['sex'] : null,
             'birthdate' => null,
-            'phone' => $row['phone'],
-            'mail' => $row['mail'],
             'city_id' => $row['city_id'] !== null ? (int)$row['city_id'] : null,
             'city_name' => $row['city_name'],
             'club_id' => $row['club_id'] !== null ? (int)$row['club_id'] : null,
@@ -304,7 +302,8 @@ if ($mysqli) {
   <?php if ($error): ?><div class="flash"><?= h($error) ?></div><?php endif; ?>
 
   <div class="warn-box">
-    Фото на сайт: отправьте на dihnova@ya.ru с указанием ID игрока.
+    <?php $photoMail = (string)(app_config()['photo_mail'] ?? ''); ?>
+    Фото на сайт: отправьте<?= $photoMail !== '' ? ' на ' . h($photoMail) : ' организаторам' ?> с указанием ID игрока.
   </div>
 
   <form method="post" id="anketa-form" class="card"><?= csrf_field() ?>
@@ -490,8 +489,9 @@ function fillPlayer(p) {
   document.getElementById('birthdate').value = ''; // дата рождения не публичная
   document.getElementById('sex').value = (p.sex === 0 || p.sex === 1) ? String(p.sex) : '';
   document.getElementById('city').value = p.city_name || '';
-  document.getElementById('phone').value = p.phone || '';
-  document.getElementById('mail').value = p.mail || '';
+  // телефон и e-mail из базы не отдаём; пустое поле = «не менять»
+  document.getElementById('phone').value = '';
+  document.getElementById('mail').value = '';
   document.getElementById('bbo').value = p.bbo || '';
   document.getElementById('gambler').value = p.gambler || '';
   document.getElementById('wbf').value = p.wbf || '';
