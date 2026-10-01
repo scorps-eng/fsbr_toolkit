@@ -1134,35 +1134,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // повтор после выбора города: файлы заново не нужны
             $cm = $_SESSION['club_multi'];
             $club = cmb_process_multi_parsed($cm['parsed'], $cm['sources'], $forcedCity, $tournIdOpt);
-        } elseif (!empty($_POST['club_multi'])) {
-            // сборка клубных МБ за период из нескольких файлов
-            $fl = $_FILES['files'] ?? null;
-            if (!$fl || !is_array($fl['name'] ?? null) || !array_filter($fl['name'])) {
-                throw new RuntimeException('Выберите файлы');
-            }
-            if (count($fl['name']) > 60) {
-                throw new RuntimeException('Слишком много файлов (максимум 60)');
-            }
-            $multi = [];
-            foreach ($fl['name'] as $i => $nm) {
-                if ($nm === '' || $nm === null) {
-                    continue;
-                }
-                $one = ['error' => $fl['error'][$i] ?? UPLOAD_ERR_NO_FILE, 'tmp_name' => $fl['tmp_name'][$i] ?? ''];
-                if (($ue = upload_error_message($one)) !== null) {
-                    throw new RuntimeException('Файл «' . $nm . '»: ' . $ue);
-                }
-                if ($one['tmp_name'] === '' || !is_uploaded_file($one['tmp_name'])) {
-                    throw new RuntimeException('Файл «' . $nm . '» не загрузился');
-                }
-                if (filesize($one['tmp_name']) > 10 * 1024 * 1024) {
-                    throw new RuntimeException('Файл «' . $nm . '» больше 10 МБ');
-                }
-                $multi[] = ['path' => $one['tmp_name'], 'name' => (string)$nm];
-            }
-            $month = trim((string)($_POST['club_month'] ?? ''));
-            $club = cmb_process_multi($multi, $month, $forcedCity, $tournIdOpt);
-            $_SESSION['club_multi'] = ['parsed' => $club['parsed'], 'sources' => $club['sources']];
         } else {
             if (($upErr = upload_error_message($_FILES['file'] ?? null)) !== null) {
                 throw new RuntimeException($upErr);
@@ -1172,9 +1143,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $orig = $_FILES['file']['name'] ?? 'report.xlsx';
             $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
-            if (!in_array($ext, ['xls', 'xlsx'], true)) {
-                throw new RuntimeException('Нужен файл .xlsx (лучше) или .xls');
-            }
+            if (in_array($ext, ['zip', 'json'], true)) {
+                // клубные МБ за период: архив (или один JSON) собирается автоматически
+                $tmpFiles = [];
+                try {
+                    if ($ext === 'zip') {
+                        [$multi, $tmpFiles] = cmb_extract_zip((string)$_FILES['file']['tmp_name']);
+                    } else {
+                        $multi = [['path' => (string)$_FILES['file']['tmp_name'], 'name' => (string)$orig]];
+                    }
+                    $club = cmb_process_multi($multi, trim((string)($_POST['club_month'] ?? '')), $forcedCity, $tournIdOpt);
+                } finally {
+                    foreach ($tmpFiles as $tf) {
+                        @unlink($tf);
+                    }
+                }
+                $_SESSION['club_multi'] = ['parsed' => $club['parsed'], 'sources' => $club['sources']];
+            } elseif (!in_array($ext, ['xls', 'xlsx'], true)) {
+                throw new RuntimeException('Нужен файл .xlsx (лучше), .xls, либо .zip / .json для клубных МБ за период');
+            } else {
             $tmp = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fsbr_' . bin2hex(random_bytes(6)) . '.' . $ext;
             if (!move_uploaded_file($_FILES['file']['tmp_name'], $tmp)) {
                 throw new RuntimeException('Не удалось сохранить файл');
@@ -1183,6 +1170,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (cmb_is_club_mb_file($tmp, $orig)) {
                 $club = cmb_process_report($tmp, $orig, $forcedCity, $tournIdOpt);
                 @unlink($tmp);
+            }
             }
         }
         if ($club !== null) {
@@ -1912,29 +1900,20 @@ h1{font-size:1.4rem;margin:0 0 8px}
 <?php if ($results === null): ?>
 <div class="card">
   <h1>Проверка отчёта</h1>
-  <p class="sub">Сверка ID и имён с базой FSBR. Подходят <b>турнирные протоколы</b> (пары / команды / индивидуал) и <b>клубные МБ</b> («Отчет по МБ…»). Файлы <b>.xls</b> и <b>.xlsx</b>.</p>
+  <p class="sub">Сверка ID и имён с базой FSBR. Подходят <b>турнирные протоколы</b> (пары / команды / индивидуал), <b>клубные МБ</b> («Отчет по МБ…») — файлы <b>.xls</b> и <b>.xlsx</b>, а также <b>.zip</b> с набором файлов за месяц.</p>
   <?php if ($error): ?><div class="flash"><?= h($error) ?></div><?php endif; ?>
   <form method="post" enctype="multipart/form-data"><?= csrf_field() ?>
     <label class="drop" id="drop">
-      <div id="label">Выберите файл .xls или .xlsx</div>
-      <input type="file" name="file" accept=".xlsx,.xls" id="file" required>
+      <div id="label">Выберите файл: .xls / .xlsx (отчёт) или .zip (клубные МБ за месяц)</div>
+      <input type="file" name="file" accept=".xlsx,.xls,.zip,.json" id="file" required>
+    </label>
+    <p class="note" style="margin:0 0 8px">Клубные МБ за период: положите все файлы месяца (JSON с парами, таблицы «ФИ / id / МБ», «Отчет по МБ») в один <b>.zip</b> — месяц и город определятся автоматически.</p>
+    <label style="display:block;margin:0 0 8px">Месяц (необязательно — только если не определился сам)
+      <input type="month" name="club_month" value="<?= h($_POST['club_month'] ?? '') ?>" style="width:auto;margin-left:6px">
     </label>
     <button class="btn" type="submit">Проверить</button>
   </form>
   <p class="note">Турнир: вкладки Sum, «Общая информация», сессии. Клубные МБ: регион, период, id / игрок / МБ — дальше сразу SQL (без расчёта рейтинга).</p>
-</div>
-<div class="card" style="margin-top:16px">
-  <h2 style="margin-top:0">Клубные МБ за месяц из нескольких файлов</h2>
-  <p class="sub">Один клубный турнир за период (например, «Москва клубный», сентябрь). Подходят: <b>JSON</b> с результатами пар (<code>name1/id1/name2/id2/mb</code>, в том числе UTF-16), таблицы <b>.xls/.xlsx</b> «ФИ / id / МБ» (если есть колонка «сумма…» — берётся она) и официальные «Отчет по МБ». МБ одного игрока суммируются по id.</p>
-  <form method="post" enctype="multipart/form-data"><?= csrf_field() ?>
-    <input type="hidden" name="club_multi" value="1">
-    <label>Файлы (можно выбрать несколько)</label>
-    <input type="file" name="files[]" accept=".json,.xls,.xlsx" multiple required>
-    <label>Месяц</label>
-    <input type="month" name="club_month" value="<?= h($_POST['club_month'] ?? '') ?>" placeholder="ГГГГ-ММ">
-    <p class="note">Если пусто — месяц берётся из дат в JSON. Файлы с датой вне месяца отклоняются.</p>
-    <button class="btn" type="submit">Собрать и проверить</button>
-  </form>
 </div>
 <script>
 const f=document.getElementById('file'),l=document.getElementById('label'),d=document.getElementById('drop');

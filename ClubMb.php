@@ -770,7 +770,101 @@ function cmb_parse_simple_table(array $rows): ?array
             'mb' => $mb,
         ];
     }
-    return ['players' => $players, 'note' => $note];
+    // месяц из заголовка вида «сумма сентябрь 2026»
+    $month = null;
+    foreach (array_slice($rows, 0, $hdr + 1) as $row) {
+        foreach ($row as $cell) {
+            if (preg_match('/сумм\w*\s+([а-яё]+)\s+(\d{4})/ui', (string)($cell ?? ''), $m)) {
+                $mm = cmb_month_from_ru($m[1]);
+                if ($mm !== null) {
+                    $month = $m[2] . '-' . $mm;
+                    break 2;
+                }
+            }
+        }
+    }
+    return ['players' => $players, 'note' => $note, 'month' => $month];
+}
+
+/** «сентябрь» / «сентября» / «сен» → '09'; null, если не месяц. */
+function cmb_month_from_ru(string $w): ?string
+{
+    $w = mb_strtolower($w, 'UTF-8');
+    foreach (['январ' => '01', 'феврал' => '02', 'март' => '03', 'апрел' => '04', 'ма' => '05', 'июн' => '06',
+              'июл' => '07', 'август' => '08', 'сентябр' => '09', 'октябр' => '10', 'ноябр' => '11', 'декабр' => '12'] as $p => $n) {
+        if (str_starts_with($w, $p) && mb_strlen($w, 'UTF-8') <= mb_strlen($p, 'UTF-8') + 3) {
+            return $n;
+        }
+    }
+    return null;
+}
+
+/** Месяц (ГГГГ-ММ) из имени файла вида …260907… (ггммдд); null, если не нашли. */
+function cmb_month_from_filename(string $name): ?string
+{
+    if (preg_match('/(?<!\d)(2\d)(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)/', $name, $m)) {
+        return '20' . $m[1] . '-' . $m[2];
+    }
+    return null;
+}
+
+/**
+ * Распаковать zip с файлами отчётов во временные файлы (имена из архива в пути не используются).
+ * @return array{0:list<array{path:string,name:string}>,1:list<string>} [файлы, временные пути для удаления]
+ */
+function cmb_extract_zip(string $zipPath): array
+{
+    if (!class_exists('ZipArchive')) {
+        throw new RuntimeException('Для .zip нужно расширение PHP zip (ZipArchive)');
+    }
+    if (!is_file($zipPath) || filesize($zipPath) < 22) {
+        throw new RuntimeException('Архив пустой или повреждён');
+    }
+    $zip = new ZipArchive();
+    if ($zip->open($zipPath) !== true) {
+        throw new RuntimeException('Не удалось открыть архив .zip');
+    }
+    if ($zip->numFiles > 300 || !zip_size_ok($zip)) {
+        $zip->close();
+        throw new RuntimeException('Архив слишком большой (больше 300 файлов или 200 МБ после распаковки)');
+    }
+    $files = [];
+    $tmps = [];
+    for ($i = 0; $i < $zip->numFiles; $i++) {
+        $raw = (string)$zip->getNameIndex($i, ZipArchive::FL_ENC_RAW); // без угадывания кодировки libzip (cp437)
+        $name = mb_check_encoding($raw, 'UTF-8') ? $raw : (string)mb_convert_encoding($raw, 'UTF-8', 'CP866');
+        $name = str_replace('\\', '/', $name);
+        if (substr($name, -1) === '/' || stripos($name, '__MACOSX') !== false) {
+            continue;
+        }
+        $base = basename($name);
+        $ext = strtolower(pathinfo($base, PATHINFO_EXTENSION));
+        if ($base === '' || $base[0] === '.' || strncmp($base, '~$', 2) === 0 || !in_array($ext, ['json', 'xls', 'xlsx'], true)) {
+            continue;
+        }
+        $st = $zip->statIndex($i);
+        if ($st !== false && (int)$st['size'] > 10 * 1024 * 1024) {
+            $zip->close();
+            foreach ($tmps as $t) {
+                @unlink($t);
+            }
+            throw new RuntimeException('Файл «' . $base . '» в архиве больше 10 МБ');
+        }
+        $data = $zip->getFromIndex($i);
+        if ($data === false) {
+            continue;
+        }
+        $tmp = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fsbr_z_' . bin2hex(random_bytes(6)) . '.' . $ext;
+        file_put_contents($tmp, $data);
+        $tmps[] = $tmp;
+        $files[] = ['path' => $tmp, 'name' => $base];
+    }
+    $zip->close();
+    if (!$files) {
+        throw new RuntimeException('В архиве нет файлов .json / .xls / .xlsx');
+    }
+    usort($files, fn($a, $b) => strcmp($a['name'], $b['name']));
+    return [$files, $tmps];
 }
 
 /**
@@ -818,7 +912,7 @@ function cmb_parse_json_report(string $text): array
  * Собрать один отчёт клубных МБ за период из нескольких файлов (JSON, простые таблицы, официальные отчёты).
  * Одинаковые игроки (по id) суммируются.
  * @param list<array{path:string,name:string}> $files
- * @param string $month 'YYYY-MM' или '' (тогда берётся из дат в JSON)
+ * @param string $month 'YYYY-MM' или '' (тогда определяется по датам в JSON, именам файлов и заголовкам таблиц)
  */
 function cmb_process_multi(array $files, string $month, ?int $forcedCity = null, ?int $tournId = null): array
 {
@@ -829,7 +923,7 @@ function cmb_process_multi(array $files, string $month, ?int $forcedCity = null,
     $noId = [];
     $sources = [];
     $city = null;
-    $dates = [];
+    $fileMonth = []; // файл → ГГГГ-ММ, если удалось определить
     foreach ($files as $f) {
         $ext = strtolower(pathinfo($f['name'], PATHINFO_EXTENSION));
         $players = [];
@@ -840,8 +934,9 @@ function cmb_process_multi(array $files, string $month, ?int $forcedCity = null,
                 $players = $r['players'];
                 $note = $r['note'];
                 $city = $city ?? ($r['city'] ?: null);
-                if ($r['date']) {
-                    $dates[] = $r['date'];
+                $ym = $r['date'] ? substr($r['date'], 0, 7) : cmb_month_from_filename($f['name']);
+                if ($ym !== null) {
+                    $fileMonth[$f['name']] = $ym;
                 }
             } elseif ($ext === 'xls' || $ext === 'xlsx') {
                 if (cmb_is_club_mb_file($f['path'], $f['name'])) {
@@ -849,6 +944,10 @@ function cmb_process_multi(array $files, string $month, ?int $forcedCity = null,
                     $players = array_map(fn($p) => ['player_id' => $p['player_id'], 'name' => (string)$p['name'], 'mb' => (float)($p['mb'] ?? 0)], $r['players']);
                     $note = 'официальный отчёт по МБ';
                     $city = $city ?? (trim((string)($r['meta']['region'] ?? '')) ?: null);
+                    $df = (string)($r['meta']['date_from'] ?? '');
+                    if (preg_match('/^(\d{4}-\d{2})/', $df, $mm)) {
+                        $fileMonth[$f['name']] = $mm[1];
+                    }
                 } else {
                     $r = cmb_parse_simple_table(cmb_read_rows($f['path'], $f['name']));
                     if ($r === null) {
@@ -856,6 +955,10 @@ function cmb_process_multi(array $files, string $month, ?int $forcedCity = null,
                     }
                     $players = $r['players'];
                     $note = $r['note'];
+                    $ym = $r['month'] ?? cmb_month_from_filename($f['name']);
+                    if ($ym !== null) {
+                        $fileMonth[$f['name']] = $ym;
+                    }
                 }
             } else {
                 throw new RuntimeException('нужен .json, .xls или .xlsx');
@@ -881,17 +984,28 @@ function cmb_process_multi(array $files, string $month, ?int $forcedCity = null,
         $sources[] = ['file' => $f['name'], 'note' => $note, 'players' => count($players), 'sum_mb' => $sum];
     }
 
-    if ($month === '' && $dates) {
-        $month = substr(min($dates), 0, 7);
+    if ($month === '') {
+        $distinct = array_values(array_unique($fileMonth));
+        if (count($distinct) === 1) {
+            $month = $distinct[0];
+        } elseif (count($distinct) > 1) {
+            $cnt = array_count_values($fileMonth);
+            arsort($cnt);
+            $parts = [];
+            foreach ($cnt as $ym => $n) {
+                $parts[] = "{$ym}: {$n} файл(ов)";
+            }
+            throw new RuntimeException('В архиве файлы за разные месяцы (' . implode('; ', $parts) . ') — оставьте один месяц.');
+        }
     }
-    if (!preg_match('/^(\d{4})-(0[1-9]|1[0-2])$/', $month, $m)) {
-        throw new RuntimeException('Укажите месяц (ГГГГ-ММ)');
+    if (!preg_match('/^(\d{4})-(0[1-9]|1[0-2])$/', $month)) {
+        throw new RuntimeException('Не удалось определить месяц по файлам — укажите его в поле «Месяц» и загрузите снова');
     }
     $dateFrom = $month . '-01';
     $dateTo = date('Y-m-t', strtotime($dateFrom));
-    foreach ($dates as $dt) {
-        if (substr($dt, 0, 7) !== $month) {
-            throw new RuntimeException('В файлах есть дата ' . $dt . ' вне выбранного месяца ' . $month . ' — проверьте набор файлов');
+    foreach ($fileMonth as $fn => $ym) {
+        if ($ym !== $month) {
+            throw new RuntimeException('Файл «' . $fn . '» относится к ' . $ym . ', а выбран месяц ' . $month);
         }
     }
 
