@@ -193,7 +193,8 @@ function cmb_parse_rows(array $rows): array
     return ['meta' => $meta, 'players' => $players, 'errors' => $errors];
 }
 
-function cmb_load_file(string $path, string $orig): array
+/** Прочитать лист .xls/.xlsx в массив строк (для разбора клубных МБ). */
+function cmb_read_rows(string $path, string $orig): array
 {
     $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
     if ($ext === 'xls') {
@@ -227,12 +228,12 @@ function cmb_load_file(string $path, string $orig): array
             $sx = @simplexml_load_string($ss);
             if ($sx !== false) {
                 $sx->registerXPathNamespace('m', 'http://schemas.openxmlformats.org/spreadsheetml/2006/main');
-                $nodes = $sx->xpath('//m:si');
+                $nodes = $sx->xpath('//*[local-name()="si"]');
                 if (!$nodes) {
                     $nodes = $sx->xpath('//*[local-name()="si"]');
                 }
                 foreach ($nodes ?: [] as $si) {
-                    $parts = $si->xpath('.//m:t');
+                    $parts = $si->xpath('.//*[local-name()="t"]');
                     if (!$parts) {
                         $parts = $si->xpath('.//*[local-name()="t"]');
                     }
@@ -264,13 +265,13 @@ function cmb_load_file(string $path, string $orig): array
             throw new RuntimeException('Не разобрать sheet XML');
         }
         $sx->registerXPathNamespace('m', 'http://schemas.openxmlformats.org/spreadsheetml/2006/main');
-        $rowNodes = $sx->xpath('//m:sheetData/m:row');
+        $rowNodes = $sx->xpath('//*[local-name()="sheetData"]/*[local-name()="row"]');
         if (!$rowNodes) {
             $rowNodes = $sx->xpath('//*[local-name()="sheetData"]/*[local-name()="row"]');
         }
         $rows = [];
         foreach ($rowNodes ?: [] as $row) {
-            $cells = $row->xpath('./m:c');
+            $cells = $row->xpath('./*[local-name()="c"]');
             if (!$cells) {
                 $cells = $row->xpath('./*[local-name()="c"]');
             }
@@ -288,7 +289,7 @@ function cmb_load_file(string $path, string $orig): array
                     $col = count($r);
                 }
                 $v = null;
-                $vNode = $c->xpath('./m:v');
+                $vNode = $c->xpath('./*[local-name()="v"]');
                 if (!$vNode) {
                     $vNode = $c->xpath('./*[local-name()="v"]');
                 }
@@ -329,7 +330,12 @@ function cmb_load_file(string $path, string $orig): array
     } else {
         throw new RuntimeException('Нужен .xls или .xlsx');
     }
-    $parsed = cmb_parse_rows($rows);
+    return $rows;
+}
+
+function cmb_load_file(string $path, string $orig): array
+{
+    $parsed = cmb_parse_rows(cmb_read_rows($path, $orig));
     $parsed['file'] = $orig;
     return $parsed;
 }
@@ -691,6 +697,221 @@ function cmb_build_sql(array $meta, array $validated, ?int $cityId = null, ?int 
 
 
 
+// ============================================================ сборка клубных МБ из нескольких файлов
+
+function cmb_to_num($v): ?float
+{
+    if (is_int($v) || is_float($v)) {
+        return (float)$v;
+    }
+    $s = str_replace([',', ' ', "\xC2\xA0"], ['.', '', ''], trim((string)$v));
+    return ($s !== '' && is_numeric($s)) ? (float)$s : null;
+}
+
+/**
+ * Простая таблица «ФИ(О) / id / МБ» (.xls/.xlsx). Если над заголовком в колонке МБ есть «сумма…» — берётся она,
+ * иначе суммируются все колонки «МБ».
+ * @return array{players:list<array>,note:string}|null null — это не такая таблица
+ */
+function cmb_parse_simple_table(array $rows): ?array
+{
+    $hdr = null;
+    $cols = ['name' => null, 'id' => null, 'mb' => []];
+    foreach (array_slice($rows, 0, 12, true) as $ri => $row) {
+        $name = $id = null;
+        $mbs = [];
+        foreach ($row as $ci => $cell) {
+            $t = mb_strtolower(trim((string)($cell ?? '')), 'UTF-8');
+            if ($name === null && preg_match('/^(фи|фио|фамилия[\s,]*имя|игрок)/u', $t)) {
+                $name = $ci;
+            } elseif ($id === null && $t === 'id') {
+                $id = $ci;
+            } elseif (preg_match('/^мб$/u', $t)) {
+                $mbs[] = $ci;
+            }
+        }
+        if ($name !== null && $id !== null && $mbs) {
+            $hdr = $ri;
+            $cols = ['name' => $name, 'id' => $id, 'mb' => $mbs];
+            break;
+        }
+    }
+    if ($hdr === null) {
+        return null;
+    }
+    $use = $cols['mb'];
+    $note = count($use) > 1 ? 'сумма колонок МБ' : 'колонка МБ';
+    foreach ($cols['mb'] as $ci) {
+        for ($r = max(0, $hdr - 3); $r <= $hdr; $r++) {
+            if (preg_match('/сумм/ui', (string)($rows[$r][$ci] ?? ''))) {
+                $use = [$ci];
+                $note = 'колонка «' . trim((string)$rows[$r][$ci]) . '»';
+                break 2;
+            }
+        }
+    }
+    $players = [];
+    foreach ($rows as $ri => $row) {
+        if ($ri <= $hdr) {
+            continue;
+        }
+        $name = trim((string)($row[$cols['name']] ?? ''));
+        $idRaw = trim((string)($row[$cols['id']] ?? ''));
+        if ($name === '' && $idRaw === '') {
+            continue;
+        }
+        $mb = 0.0;
+        foreach ($use as $ci) {
+            $mb += cmb_to_num($row[$ci] ?? null) ?? 0.0;
+        }
+        $players[] = [
+            'player_id' => ($idRaw !== '' && ctype_digit($idRaw)) ? (int)$idRaw : null,
+            'name' => $name,
+            'mb' => $mb,
+        ];
+    }
+    return ['players' => $players, 'note' => $note];
+}
+
+/**
+ * JSON «results»: пары (name1,id1,name2,id2,mb) или одиночные (name,id,mb). МБ пары начисляется каждому игроку.
+ * @return array{players:list<array>,note:string,city:?string,date:?string}
+ */
+function cmb_parse_json_report(string $text): array
+{
+    $d = json_decode(json_text_to_utf8($text), true);
+    if (!is_array($d)) {
+        throw new RuntimeException('Некорректный JSON');
+    }
+    $list = $d['results'] ?? ($d['players'] ?? null);
+    if (!is_array($list)) {
+        throw new RuntimeException('В JSON нет списка results');
+    }
+    $players = [];
+    foreach ($list as $r) {
+        if (!is_array($r)) {
+            continue;
+        }
+        $mb = cmb_to_num($r['mb'] ?? null) ?? 0.0;
+        foreach ([['name1', 'id1'], ['name2', 'id2'], ['name', 'id']] as [$nk, $ik]) {
+            if (!array_key_exists($nk, $r) && !array_key_exists($ik, $r)) {
+                continue;
+            }
+            $idRaw = trim((string)($r[$ik] ?? ''));
+            $players[] = [
+                'player_id' => ($idRaw !== '' && ctype_digit($idRaw)) ? (int)$idRaw : null,
+                'name' => trim((string)($r[$nk] ?? '')),
+                'mb' => $mb,
+            ];
+        }
+    }
+    $date = isset($d['date']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$d['date']) ? (string)$d['date'] : null;
+    return [
+        'players' => $players,
+        'note' => 'JSON, МБ пары каждому игроку',
+        'city' => isset($d['city']) ? trim((string)$d['city']) : null,
+        'date' => $date,
+    ];
+}
+
+/**
+ * Собрать один отчёт клубных МБ за период из нескольких файлов (JSON, простые таблицы, официальные отчёты).
+ * Одинаковые игроки (по id) суммируются.
+ * @param list<array{path:string,name:string}> $files
+ * @param string $month 'YYYY-MM' или '' (тогда берётся из дат в JSON)
+ */
+function cmb_process_multi(array $files, string $month, ?int $forcedCity = null, ?int $tournId = null): array
+{
+    if (!$files) {
+        throw new RuntimeException('Выберите файлы');
+    }
+    $byId = [];
+    $noId = [];
+    $sources = [];
+    $city = null;
+    $dates = [];
+    foreach ($files as $f) {
+        $ext = strtolower(pathinfo($f['name'], PATHINFO_EXTENSION));
+        $players = [];
+        $note = '';
+        try {
+            if ($ext === 'json') {
+                $r = cmb_parse_json_report((string)file_get_contents($f['path']));
+                $players = $r['players'];
+                $note = $r['note'];
+                $city = $city ?? ($r['city'] ?: null);
+                if ($r['date']) {
+                    $dates[] = $r['date'];
+                }
+            } elseif ($ext === 'xls' || $ext === 'xlsx') {
+                if (cmb_is_club_mb_file($f['path'], $f['name'])) {
+                    $r = cmb_load_file($f['path'], $f['name']);
+                    $players = array_map(fn($p) => ['player_id' => $p['player_id'], 'name' => (string)$p['name'], 'mb' => (float)($p['mb'] ?? 0)], $r['players']);
+                    $note = 'официальный отчёт по МБ';
+                    $city = $city ?? (trim((string)($r['meta']['region'] ?? '')) ?: null);
+                } else {
+                    $r = cmb_parse_simple_table(cmb_read_rows($f['path'], $f['name']));
+                    if ($r === null) {
+                        throw new RuntimeException('не найдена таблица «ФИ / id / МБ»');
+                    }
+                    $players = $r['players'];
+                    $note = $r['note'];
+                }
+            } else {
+                throw new RuntimeException('нужен .json, .xls или .xlsx');
+            }
+        } catch (Throwable $e) {
+            throw new RuntimeException('Файл «' . $f['name'] . '»: ' . $e->getMessage());
+        }
+        $sum = 0.0;
+        foreach ($players as $p) {
+            $mb = (float)$p['mb'];
+            $sum += $mb;
+            if ($p['player_id'] !== null) {
+                $k = (int)$p['player_id'];
+                if (!isset($byId[$k])) {
+                    $byId[$k] = ['n' => null, 'player_id' => $k, 'name' => $p['name'], 'mb' => 0.0, 'src' => []];
+                }
+                $byId[$k]['mb'] += $mb;
+                $byId[$k]['src'][$f['name']] = ($byId[$k]['src'][$f['name']] ?? 0.0) + $mb;
+            } else {
+                $noId[] = ['n' => null, 'player_id' => null, 'name' => $p['name'], 'mb' => $mb, 'src' => [$f['name'] => $mb]];
+            }
+        }
+        $sources[] = ['file' => $f['name'], 'note' => $note, 'players' => count($players), 'sum_mb' => $sum];
+    }
+
+    if ($month === '' && $dates) {
+        $month = substr(min($dates), 0, 7);
+    }
+    if (!preg_match('/^(\d{4})-(0[1-9]|1[0-2])$/', $month, $m)) {
+        throw new RuntimeException('Укажите месяц (ГГГГ-ММ)');
+    }
+    $dateFrom = $month . '-01';
+    $dateTo = date('Y-m-t', strtotime($dateFrom));
+    foreach ($dates as $dt) {
+        if (substr($dt, 0, 7) !== $month) {
+            throw new RuntimeException('В файлах есть дата ' . $dt . ' вне выбранного месяца ' . $month . ' — проверьте набор файлов');
+        }
+    }
+
+    $merged = array_merge(array_values($byId), $noId);
+    $parsed = [
+        'meta' => ['region' => (string)$city, 'club' => '', 'date_from' => $dateFrom, 'date_to' => $dateTo],
+        'players' => $merged,
+    ];
+    return cmb_process_multi_parsed($parsed, $sources, $forcedCity, $tournId);
+}
+
+/** Вторая половина сборки (без повторной загрузки файлов — например, после выбора города). */
+function cmb_process_multi_parsed(array $parsed, array $sources, ?int $forcedCity = null, ?int $tournId = null): array
+{
+    $res = cmb_finalize($parsed, count($sources) . ' файл(ов)', $forcedCity, $tournId);
+    $res['sources'] = $sources;
+    $res['parsed'] = $parsed;
+    return $res;
+}
+
 /** Быстрая проверка: это отчёт по клубным МБ? */
 function cmb_is_club_mb_file(string $path, string $origName): bool
 {
@@ -729,7 +950,12 @@ function cmb_is_club_mb_file(string $path, string $origName): bool
  */
 function cmb_process_report(string $path, string $origName, ?int $forcedCity = null, ?int $tournId = null): array
 {
-    $parsed = cmb_load_file($path, $origName);
+    return cmb_finalize(cmb_load_file($path, $origName), $origName, $forcedCity, $tournId);
+}
+
+/** Проверка игроков, определение города и SQL для уже разобранного отчёта. */
+function cmb_finalize(array $parsed, string $origName, ?int $forcedCity = null, ?int $tournId = null): array
+{
     $validated = cmb_validate($parsed['players']);
     $db = cmb_db();
     $cityInfo = cmb_resolve_city($db, $parsed['meta'], $forcedCity);

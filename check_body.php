@@ -1125,29 +1125,70 @@ $clubMbMode = false;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
-        if (($upErr = upload_error_message($_FILES['file'] ?? null)) !== null) {
-            throw new RuntimeException($upErr);
+        $club = null;
+        $forcedCity = (!empty($_POST['city_id']) && ctype_digit((string)$_POST['city_id']))
+            ? (int)$_POST['city_id'] : null;
+        $tournIdOpt = (!empty($_POST['tourn_id']) && ctype_digit((string)$_POST['tourn_id']))
+            ? (int)$_POST['tourn_id'] : null;
+        if (!empty($_POST['club_multi_reuse']) && is_array($_SESSION['club_multi'] ?? null)) {
+            // повтор после выбора города: файлы заново не нужны
+            $cm = $_SESSION['club_multi'];
+            $club = cmb_process_multi_parsed($cm['parsed'], $cm['sources'], $forcedCity, $tournIdOpt);
+        } elseif (!empty($_POST['club_multi'])) {
+            // сборка клубных МБ за период из нескольких файлов
+            $fl = $_FILES['files'] ?? null;
+            if (!$fl || !is_array($fl['name'] ?? null) || !array_filter($fl['name'])) {
+                throw new RuntimeException('Выберите файлы');
+            }
+            if (count($fl['name']) > 60) {
+                throw new RuntimeException('Слишком много файлов (максимум 60)');
+            }
+            $multi = [];
+            foreach ($fl['name'] as $i => $nm) {
+                if ($nm === '' || $nm === null) {
+                    continue;
+                }
+                $one = ['error' => $fl['error'][$i] ?? UPLOAD_ERR_NO_FILE, 'tmp_name' => $fl['tmp_name'][$i] ?? ''];
+                if (($ue = upload_error_message($one)) !== null) {
+                    throw new RuntimeException('Файл «' . $nm . '»: ' . $ue);
+                }
+                if ($one['tmp_name'] === '' || !is_uploaded_file($one['tmp_name'])) {
+                    throw new RuntimeException('Файл «' . $nm . '» не загрузился');
+                }
+                if (filesize($one['tmp_name']) > 10 * 1024 * 1024) {
+                    throw new RuntimeException('Файл «' . $nm . '» больше 10 МБ');
+                }
+                $multi[] = ['path' => $one['tmp_name'], 'name' => (string)$nm];
+            }
+            $month = trim((string)($_POST['club_month'] ?? ''));
+            $club = cmb_process_multi($multi, $month, $forcedCity, $tournIdOpt);
+            $_SESSION['club_multi'] = ['parsed' => $club['parsed'], 'sources' => $club['sources']];
+        } else {
+            if (($upErr = upload_error_message($_FILES['file'] ?? null)) !== null) {
+                throw new RuntimeException($upErr);
+            }
+            if (empty($_FILES['file']['tmp_name'])) {
+                throw new RuntimeException('Выберите файл');
+            }
+            $orig = $_FILES['file']['name'] ?? 'report.xlsx';
+            $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
+            if (!in_array($ext, ['xls', 'xlsx'], true)) {
+                throw new RuntimeException('Нужен файл .xlsx (лучше) или .xls');
+            }
+            $tmp = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fsbr_' . bin2hex(random_bytes(6)) . '.' . $ext;
+            if (!move_uploaded_file($_FILES['file']['tmp_name'], $tmp)) {
+                throw new RuntimeException('Не удалось сохранить файл');
+            }
+            // Клубные МБ — отдельный формат, без расчёта рейтинга
+            if (cmb_is_club_mb_file($tmp, $orig)) {
+                $club = cmb_process_report($tmp, $orig, $forcedCity, $tournIdOpt);
+                @unlink($tmp);
+            }
         }
-        if (empty($_FILES['file']['tmp_name'])) {
-            throw new RuntimeException('Выберите файл');
-        }
-        $orig = $_FILES['file']['name'] ?? 'report.xlsx';
-        $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
-        if (!in_array($ext, ['xls', 'xlsx'], true)) {
-            throw new RuntimeException('Нужен файл .xlsx (лучше) или .xls');
-        }
-        $tmp = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fsbr_' . bin2hex(random_bytes(6)) . '.' . $ext;
-        if (!move_uploaded_file($_FILES['file']['tmp_name'], $tmp)) {
-            throw new RuntimeException('Не удалось сохранить файл');
-        }
-        // Клубные МБ — отдельный формат, без расчёта рейтинга
-        if (cmb_is_club_mb_file($tmp, $orig)) {
-            $forcedCity = (!empty($_POST['city_id']) && ctype_digit((string)$_POST['city_id']))
-                ? (int)$_POST['city_id'] : null;
-            $tournIdOpt = (!empty($_POST['tourn_id']) && ctype_digit((string)$_POST['tourn_id']))
-                ? (int)$_POST['tourn_id'] : null;
-            $club = cmb_process_report($tmp, $orig, $forcedCity, $tournIdOpt);
-            @unlink($tmp);
+        if ($club !== null) {
+            if (empty($_POST['club_multi']) && empty($_POST['club_multi_reuse'])) {
+                unset($_SESSION['club_multi']);
+            }
             $parsed = [
                 'format' => 'club_mb',
                 'meta' => $club['meta'],
@@ -1166,9 +1207,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'teams' => [],
             ];
             $meta = $club['meta'];
-            $results = validate($parsed['players'], []);
-            // enrich validated with club mb status from cmb_validate already done
-            // rebuild json for club
+            // игроки уже проверены в cmb_validate (ClubMb); общий validate() здесь не нужен
             $jsonReport = [
                 'format' => 'club_mb',
                 'meta' => $club['meta'],
@@ -1182,6 +1221,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'sum_mb' => array_sum(array_map(fn($p) => (float)($p['mb'] ?? 0), $club['players'])),
                 ],
                 'warnings' => $club['city_error'] ? [['message' => $club['city_error']]] : [],
+                'sources' => $club['sources'] ?? null,
             ];
             $_SESSION['report_json'] = json_encode($jsonReport, JSON_UNESCAPED_UNICODE);
             $_SESSION['club_mb_sql'] = $club['sql'];
@@ -1883,6 +1923,19 @@ h1{font-size:1.4rem;margin:0 0 8px}
   </form>
   <p class="note">Турнир: вкладки Sum, «Общая информация», сессии. Клубные МБ: регион, период, id / игрок / МБ — дальше сразу SQL (без расчёта рейтинга).</p>
 </div>
+<div class="card" style="margin-top:16px">
+  <h2 style="margin-top:0">Клубные МБ за месяц из нескольких файлов</h2>
+  <p class="sub">Один клубный турнир за период (например, «Москва клубный», сентябрь). Подходят: <b>JSON</b> с результатами пар (<code>name1/id1/name2/id2/mb</code>, в том числе UTF-16), таблицы <b>.xls/.xlsx</b> «ФИ / id / МБ» (если есть колонка «сумма…» — берётся она) и официальные «Отчет по МБ». МБ одного игрока суммируются по id.</p>
+  <form method="post" enctype="multipart/form-data"><?= csrf_field() ?>
+    <input type="hidden" name="club_multi" value="1">
+    <label>Файлы (можно выбрать несколько)</label>
+    <input type="file" name="files[]" accept=".json,.xls,.xlsx" multiple required>
+    <label>Месяц</label>
+    <input type="month" name="club_month" value="<?= h($_POST['club_month'] ?? '') ?>" placeholder="ГГГГ-ММ">
+    <p class="note">Если пусто — месяц берётся из дат в JSON. Файлы с датой вне месяца отклоняются.</p>
+    <button class="btn" type="submit">Собрать и проверить</button>
+  </form>
+</div>
 <script>
 const f=document.getElementById('file'),l=document.getElementById('label'),d=document.getElementById('drop');
 f.onchange=()=>{if(f.files[0])l.textContent=f.files[0].name};
@@ -2290,6 +2343,16 @@ endif; ?>
     · сумма МБ: <b><?= h((string)($jsonReport['summary']['sum_mb'] ?? '')) ?></b>
   </p>
   <?php endif; ?>
+  <?php if (!empty($jsonReport['sources'])): ?>
+  <h3 style="margin:14px 0 6px;font-size:1rem">Файлы в сборке (<?= count($jsonReport['sources']) ?>)</h3>
+  <table>
+    <tr><th>Файл</th><th>Как прочитан</th><th>Игроков</th><th>Σ МБ</th></tr>
+    <?php foreach ($jsonReport['sources'] as $src): ?>
+    <tr><td><?= h($src['file']) ?></td><td><?= h($src['note']) ?></td><td><?= (int)$src['players'] ?></td><td><?= h((string)$src['sum_mb']) ?></td></tr>
+    <?php endforeach; ?>
+  </table>
+  <p class="note">Период: <?= h($jsonReport['meta']['date_from'] ?? '') ?> — <?= h($jsonReport['meta']['date_to'] ?? '') ?>. Если файл попал сюда по ошибке — загрузите набор заново без него.</p>
+  <?php endif; ?>
   <?php if (!empty($jsonReport['city_error'])): ?>
   <div class="flash"><?= h($jsonReport['city_error']) ?></div>
   <form method="post" enctype="multipart/form-data"><?= csrf_field() ?>
@@ -2306,8 +2369,13 @@ endif; ?>
       <option value="<?= (int)$c['city_id'] ?>"><?= h($c['city_name']) ?></option>
       <?php endforeach; ?>
     </select>
+    <?php if (!empty($jsonReport['sources'])): ?>
+    <input type="hidden" name="club_multi_reuse" value="1">
+    <p class="note">Файлы повторно загружать не нужно — выберите город.</p>
+    <?php else: ?>
     <p class="note">Загрузите тот же файл снова с выбранным городом.</p>
     <input type="file" name="file" accept=".xls,.xlsx" required>
+    <?php endif; ?>
     <input type="hidden" name="tourn_id" value="<?= h($_POST['tourn_id'] ?? '') ?>">
     <button class="btn" type="submit">Проверить снова</button>
   </form>

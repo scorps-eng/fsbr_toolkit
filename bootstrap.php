@@ -91,6 +91,31 @@ function db_open(string $host, string $user, string $pass, string $name, string 
     return $m;
 }
 
+/**
+ * Текст JSON в UTF-8: снимает BOM, понимает UTF-16 LE/BE (так сохраняет Блокнот/PowerShell) и cp1251 как запасной вариант.
+ */
+function json_text_to_utf8(string $raw): string
+{
+    if (strncmp($raw, "\xEF\xBB\xBF", 3) === 0) {
+        return substr($raw, 3);
+    }
+    if (strncmp($raw, "\xFF\xFE", 2) === 0) {
+        return (string)mb_convert_encoding(substr($raw, 2), 'UTF-8', 'UTF-16LE');
+    }
+    if (strncmp($raw, "\xFE\xFF", 2) === 0) {
+        return (string)mb_convert_encoding(substr($raw, 2), 'UTF-8', 'UTF-16BE');
+    }
+    // UTF-16 без BOM: много нулевых байтов
+    if (strlen($raw) >= 4 && substr_count(substr($raw, 0, 200), "\0") > 20) {
+        $enc = ($raw[0] === "\0") ? 'UTF-16BE' : 'UTF-16LE';
+        return (string)mb_convert_encoding($raw, 'UTF-8', $enc);
+    }
+    if (!mb_check_encoding($raw, 'UTF-8')) {
+        return (string)mb_convert_encoding($raw, 'UTF-8', 'Windows-1251');
+    }
+    return $raw;
+}
+
 /** Понятное сообщение об ошибке загрузки файла из $_FILES[...]; null — ошибки нет. */
 function upload_error_message(?array $f): ?string
 {

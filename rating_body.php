@@ -100,7 +100,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($jsonText === '' || $jsonText === false) {
             throw new RuntimeException('Загрузите JSON-отчёт или сначала выполните проверку');
         }
-        $data = json_decode($jsonText, true);
+        $data = json_decode(json_text_to_utf8((string)$jsonText), true);
         if (!is_array($data)) {
             throw new RuntimeException('Некорректный JSON');
         }
