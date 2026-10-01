@@ -31,12 +31,31 @@ class XlsReader
     }
 
     /** @return list<list<string|float|int|null>> */
-    public function readSheet(string $name): array
+    public function readSheet(string $name, bool $skipHidden = false): array
     {
         if (!isset($this->sheets[$name])) {
             return [];
         }
-        return $this->sheets[$name]['rows'];
+        $rows = $this->sheets[$name]['rows'];
+        if (!$skipHidden) {
+            return $rows;
+        }
+        // скрытые строки отбрасываются, ячейки скрытых столбцов обнуляются
+        $hr = $this->sheets[$name]['hidRows'] ?? [];
+        $hc = $this->sheets[$name]['hidCols'] ?? [];
+        $out = [];
+        foreach ($rows as $i => $r) {
+            if (isset($hr[$i])) {
+                continue;
+            }
+            foreach ($hc as $c => $_) {
+                if (array_key_exists($c, $r)) {
+                    $r[$c] = null;
+                }
+            }
+            $out[] = $r;
+        }
+        return $out;
     }
 
     private function oleExtractWorkbook(string $ole): string
@@ -266,6 +285,27 @@ class XlsReader
                     $v = $this->decodeRk($rk);
                     $this->setCell($currentSheet, $row, $colFirst + $i, $v);
                     $o += 6;
+                }
+                continue;
+            }
+            // ROW (0x0208): бит 0x20 в grbit — скрытая строка
+            elseif ($code === 0x0208 && $length >= 14 && $currentSheet !== null) {
+                $rw = unpack('v', substr($rec, 0, 2))[1];
+                $grbit = unpack('v', substr($rec, 12, 2))[1];
+                if ($grbit & 0x20) {
+                    $this->sheets[$currentSheet]['hidRows'][$rw] = true;
+                }
+                continue;
+            }
+            // COLINFO (0x007D): бит 0 в grbit — скрытые столбцы colFirst..colLast
+            elseif ($code === 0x007D && $length >= 12 && $currentSheet !== null) {
+                $c1 = unpack('v', substr($rec, 0, 2))[1];
+                $c2 = unpack('v', substr($rec, 2, 2))[1];
+                $grbit = unpack('v', substr($rec, 8, 2))[1];
+                if ($grbit & 0x01) {
+                    for ($cc = $c1; $cc <= min($c2, 255); $cc++) {
+                        $this->sheets[$currentSheet]['hidCols'][$cc] = true;
+                    }
                 }
                 continue;
             }

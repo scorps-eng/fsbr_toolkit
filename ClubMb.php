@@ -201,7 +201,7 @@ function cmb_read_rows(string $path, string $orig): array
         $xls = new XlsReader($path);
         $rows = [];
         foreach ($xls->sheetNames() as $name) {
-            $r = $xls->readSheet($name);
+            $r = $xls->readSheet($name, true); // скрытые строки/столбцы игнорируем
             if (count($r) > 3) {
                 $rows = $r;
                 break;
@@ -269,8 +269,22 @@ function cmb_read_rows(string $path, string $orig): array
         if (!$rowNodes) {
             $rowNodes = $sx->xpath('//*[local-name()="sheetData"]/*[local-name()="row"]');
         }
+        // скрытые столбцы (<col hidden="1" min max>) — их ячейки игнорируем
+        $hiddenCols = [];
+        foreach ($sx->xpath('//*[local-name()="cols"]/*[local-name()="col"]') ?: [] as $cn) {
+            $hv = strtolower((string)$cn['hidden']);
+            if ($hv === '1' || $hv === 'true') {
+                for ($cc = (int)$cn['min']; $cc <= min((int)$cn['max'], 16384); $cc++) {
+                    $hiddenCols[$cc - 1] = true;
+                }
+            }
+        }
         $rows = [];
         foreach ($rowNodes ?: [] as $row) {
+            $hv = strtolower((string)$row['hidden']);
+            if ($hv === '1' || $hv === 'true') {
+                continue; // скрытая строка (в т.ч. отфильтрованная)
+            }
             $cells = $row->xpath('./*[local-name()="c"]');
             if (!$cells) {
                 $cells = $row->xpath('./*[local-name()="c"]');
@@ -287,6 +301,9 @@ function cmb_read_rows(string $path, string $orig): array
                     $col--;
                 } else {
                     $col = count($r);
+                }
+                if (isset($hiddenCols[$col])) {
+                    continue;
                 }
                 $v = null;
                 $vNode = $c->xpath('./*[local-name()="v"]');
