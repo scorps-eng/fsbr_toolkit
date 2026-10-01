@@ -214,8 +214,12 @@ function cmb_load_file(string $path, string $orig): array
             throw new RuntimeException('Для .xlsx нужно расширение PHP zip (ZipArchive)');
         }
         $zip = new ZipArchive();
-        if ($zip->open($path) !== true) {
+        if (!is_file($path) || filesize($path) < 22 || $zip->open($path) !== true) {
             throw new RuntimeException('Не удалось открыть xlsx');
+        }
+        if (!zip_size_ok($zip)) {
+            $zip->close();
+            throw new RuntimeException('XLSX слишком большой после распаковки — файл отклонён');
         }
         $shared = [];
         $ss = $zip->getFromName('xl/sharedStrings.xml');

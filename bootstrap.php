@@ -91,6 +91,47 @@ function db_open(string $host, string $user, string $pass, string $name, string 
     return $m;
 }
 
+/** Понятное сообщение об ошибке загрузки файла из $_FILES[...]; null — ошибки нет. */
+function upload_error_message(?array $f): ?string
+{
+    if ($f === null || !isset($f['error'])) {
+        return null;
+    }
+    $e = is_array($f['error']) ? UPLOAD_ERR_PARTIAL : (int)$f['error'];
+    switch ($e) {
+        case UPLOAD_ERR_OK:
+        case UPLOAD_ERR_NO_FILE:
+            return null; // «нет файла» обрабатывает вызывающий код
+        case UPLOAD_ERR_INI_SIZE:
+        case UPLOAD_ERR_FORM_SIZE:
+            return 'Файл больше допустимого размера загрузки на сервере (upload_max_filesize / post_max_size)';
+        case UPLOAD_ERR_PARTIAL:
+            return 'Файл загрузился не полностью — повторите';
+        case UPLOAD_ERR_NO_TMP_DIR:
+        case UPLOAD_ERR_CANT_WRITE:
+            return 'На сервере нет места или временной папки для загрузки';
+        default:
+            return 'Ошибка загрузки файла (код ' . $e . ')';
+    }
+}
+
+/** Защита от «zip-бомбы»: суммарный распакованный размер архива не больше $max байт. */
+function zip_size_ok(ZipArchive $zip, int $max = 200 * 1024 * 1024): bool
+{
+    $sum = 0;
+    for ($i = 0; $i < $zip->numFiles; $i++) {
+        $st = $zip->statIndex($i);
+        if ($st === false) {
+            return false;
+        }
+        $sum += (int)$st['size'];
+        if ($sum > $max) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /** Соединение только для чтения; null, если БД недоступна или не настроена. */
 function db_ro(): ?mysqli
 {

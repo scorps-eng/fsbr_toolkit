@@ -628,9 +628,16 @@ function parse_xlsx(string $path): array
     if (!class_exists('ZipArchive')) {
         throw new RuntimeException('Нужно расширение PHP zip (ZipArchive)');
     }
+    if (!is_file($path) || filesize($path) < 22) {
+        throw new RuntimeException('Файл пустой или не является XLSX');
+    }
     $zip = new ZipArchive();
     if ($zip->open($path) !== true) {
         throw new RuntimeException('Не удалось открыть XLSX');
+    }
+    if (!zip_size_ok($zip)) {
+        $zip->close();
+        throw new RuntimeException('XLSX слишком большой после распаковки (больше 200 МБ) — файл отклонён');
     }
     $shared = xlsx_shared_strings($zip);
     $sheets = xlsx_sheet_names($zip);
@@ -1118,6 +1125,9 @@ $clubMbMode = false;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
+        if (($upErr = upload_error_message($_FILES['file'] ?? null)) !== null) {
+            throw new RuntimeException($upErr);
+        }
         if (empty($_FILES['file']['tmp_name'])) {
             throw new RuntimeException('Выберите файл');
         }

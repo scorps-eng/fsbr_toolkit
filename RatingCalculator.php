@@ -239,6 +239,19 @@ class RatingCalculator
                 $this->N0++;
             }
         }
+        // п. 8.10: на чемпионатах Европы и мира N0 — общее число участников квалификационного списка
+        $warnings = [];
+        if (preg_match('/^(eu_|w_|olympiad_)/', $this->guaranteedKey)) {
+            $this->N0 = $this->N;
+        }
+        // п. 8.5: минимум участников для рейтингового турнира (женский и юниорский ЧР — исключение)
+        $minN = ['team' => 8, 'pair' => 16, 'individual' => 28][$this->format] ?? 0;
+        if ($this->status !== 'non_rating' && $this->status !== 'express'
+            && !in_array($this->guaranteedKey, ['ru_women_pair', 'ru_junior'], true)
+            && $this->N < $minN) {
+            $warnings[] = "В квалификационном списке {$this->N} участн. — меньше минимума {$minN} (п. 8.5): "
+                . 'турнир не может быть рейтинговым, РО/ПБ начислять не следует.';
+        }
 
         $dq = ($this->format === 'team') ? 88.0 : 66.0;
         $Nq = ($this->format === 'team') ? 16.0 : 32.0;
@@ -446,6 +459,7 @@ class RatingCalculator
             'guaranteed' => $this->guaranteedKey,
             'guaranteed_pb1' => $this->guaranteedPbForPlace(1),
             'rc_boosted_for_guaranteed_pb' => $rcBoosted,
+            'warnings' => $warnings,
         ];
 
         return [

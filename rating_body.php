@@ -84,7 +84,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         $jsonText = '';
+        if (($upErr = upload_error_message($_FILES['json'] ?? null)) !== null) {
+            throw new RuntimeException($upErr);
+        }
         if (!empty($_FILES['json']['tmp_name'])) {
+            if (filesize($_FILES['json']['tmp_name']) > 10 * 1024 * 1024) {
+                throw new RuntimeException('JSON-файл больше 10 МБ');
+            }
             $jsonText = file_get_contents($_FILES['json']['tmp_name']);
         } elseif (!empty($_POST['json_text'])) {
             $jsonText = $_POST['json_text'];
@@ -450,7 +456,9 @@ h1{font-size:1.35rem;margin:0 0 8px}
     <?php if (!empty($meta['date_from'])): ?> · <?= h($meta['date_from']) ?><?php if (!empty($meta['date_to'])): ?> — <?= h($meta['date_to']) ?><?php endif; ?><?php endif; ?>
   </p>
 
-  <?php $p = $out['params']; ?>
+  <?php $p = $out['params']; foreach (($p['warnings'] ?? []) as $w): ?>
+  <p class="flash"><?= h($w) ?></p>
+  <?php endforeach; ?>
   <div class="params">
     <div class="param"><div class="v"><?= h((string)$p['N']) ?></div><div class="l">N участников</div></div>
     <div class="param"><div class="v"><?= h((string)$p['d']) ?></div><div class="l">d сдач</div></div>
