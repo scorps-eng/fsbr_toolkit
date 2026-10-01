@@ -111,6 +111,9 @@ class RatingCalculator
 
     public array $debug = [];
 
+    /** Участников меньше минимума рейтинговости (п. 8.5): гарантированные ПБ не применяются */
+    public bool $belowMin = false;
+
     public function __construct(string $format, string $status, float $d, string $guaranteedKey = 'none')
     {
         $this->format = $format;
@@ -123,7 +126,7 @@ class RatingCalculator
     public function guaranteedPbForPlace(int $p): int
     {
         $sched = self::GUARANTEED_PB[$this->guaranteedKey] ?? null;
-        if ($sched === null) {
+        if ($sched === null || $this->belowMin) {
             return 0;
         }
         // спец. зоны для ЧМ парный
@@ -246,11 +249,14 @@ class RatingCalculator
         }
         // п. 8.5: минимум участников для рейтингового турнира (женский и юниорский ЧР — исключение)
         $minN = ['team' => 8, 'pair' => 16, 'individual' => 28][$this->format] ?? 0;
+        $this->belowMin = false;
         if ($this->status !== 'non_rating' && $this->status !== 'express'
             && !in_array($this->guaranteedKey, ['ru_women_pair', 'ru_junior'], true)
             && $this->N < $minN) {
+            $this->belowMin = true;
             $warnings[] = "В квалификационном списке {$this->N} участн. — меньше минимума {$minN} (п. 8.5): "
-                . 'турнир не может быть рейтинговым, РО/ПБ начислять не следует.';
+                . 'турнир не может быть рейтинговым, РО/ПБ начислять не следует'
+                . ($this->guaranteedKey !== 'none' ? '; гарантированные ПБ не применены.' : '.');
         }
 
         $dq = ($this->format === 'team') ? 88.0 : 66.0;
