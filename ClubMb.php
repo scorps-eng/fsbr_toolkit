@@ -3,27 +3,16 @@ declare(strict_types=1);
 /**
  * Клубные МБ: разбор отчёта, проверка игроков, SQL type=5.
  */
+require_once __DIR__ . '/names.php';
 require_once __DIR__ . '/XlsReader.php';
-if (file_exists(__DIR__ . '/config.php')) {
-    $CONFIG = require __DIR__ . '/config.php';
-    if (!defined('DB_HOST')) {
-        define('DB_HOST', $CONFIG['db_host']);
-        define('DB_USER', $CONFIG['db_user']);
-        define('DB_PASS', $CONFIG['db_pass']);
-        define('DB_NAME', $CONFIG['db_name']);
-    }
-}
+require_once __DIR__ . '/bootstrap.php';
 
-function cmb_h(?string $s): string {
-    return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+function cmb_h($s): string {
+    return h($s);
 }
 
 function cmb_db(): ?mysqli {
-    if (!defined('DB_HOST')) return null;
-    $m = @new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
-    if ($m->connect_errno) return null;
-    $m->set_charset('utf8mb4');
-    return $m;
+    return db_ro();
 }
 
 function cmb_cell(array $row, int $i): string {
@@ -379,12 +368,8 @@ function cmb_validate(array $players): array
         $entry['db_fio'] = $dbFio;
         $entry['city'] = $row['city_name'] ?? null;
         $entry['state'] = isset($row['state']) ? (int)$row['state'] : null;
-        // сравнение имён — мягкое
-        $rep = cmb_normalize_name($p['name'] ?? '');
-        $dbn = cmb_normalize_name($dbFio);
-        $dbShort = cmb_normalize_name(trim(($row['family'] ?? '') . ' ' . mb_substr((string)($row['given'] ?? ''), 0, 1, 'UTF-8')));
-        if ($rep === '' || str_contains($dbn, $rep) || str_contains($rep, cmb_normalize_name($row['family'] ?? ''))
-            || similar_text($rep, $dbn) / max(1, mb_strlen($dbn)) > 0.5) {
+        // то же сравнение, что при проверке турниров (порядок слов, инициалы, ё/е)
+        if (trim((string)($p['name'] ?? '')) === '' || names_match((string)($p['name'] ?? ''), (string)($row['family'] ?? ''), (string)($row['given'] ?? ''), (string)($row['patronymic'] ?? ''))) {
             $entry['status'] = 'ok';
         } else {
             $entry['status'] = 'name_mismatch';
@@ -534,27 +519,21 @@ function cmb_resolve_city(?mysqli $db, array $meta, ?int $forcedId = null): arra
             $tryNames[] = $stripped;
         }
         $tryNames[] = $raw;
-        // первое слово
-        if (preg_match('/^([\p{L}\-]+)/u', $stripped !== '' ? $stripped : $raw, $m)) {
-            $w = $m[1];
-            $nw = cmb_norm_place($w);
-            if (isset($aliases[$nw])) {
-                $tryNames[] = $aliases[$nw];
-            }
-            $tryNames[] = $w;
-        }
     }
     $tryNames = array_values(array_unique(array_filter($tryNames)));
 
+    // сначала точные совпадения по всем вариантам, и только потом приблизительные
     foreach ($tryNames as $q) {
         $eq = $db->real_escape_string($q);
-        // точное (без регистра)
         $res = @$db->query("SELECT city_id, city_name FROM cities WHERE city_name = '{$eq}' LIMIT 1");
         if ($res && ($row = $res->fetch_assoc())) {
             return ['city_id' => (int)$row['city_id'], 'city_name' => (string)$row['city_name'], 'matched_by' => 'exact:' . $q];
         }
+    }
+    foreach ($tryNames as $q) {
+        $eq = $db->real_escape_string($q);
         // LIKE с приоритетом более короткого имени (город, не область)
-        $res = @$db->query("SELECT city_id, city_name FROM cities WHERE city_name LIKE '{$eq}%' OR city_name LIKE '%{$eq}%' ORDER BY LENGTH(city_name) ASC LIMIT 5");
+        $res = @$db->query("SELECT city_id, city_name FROM cities WHERE city_name LIKE '{$eq}%' ORDER BY LENGTH(city_name) ASC LIMIT 5");
         if ($res) {
             $rows = [];
             while ($row = $res->fetch_assoc()) $rows[] = $row;
@@ -576,8 +555,41 @@ function cmb_resolve_city(?mysqli $db, array $meta, ?int $forcedId = null): arra
 }
 
 /** SQL: tourn_header type=5 + tourn_ind (team_id=player_id). results не трогаем. */
-function cmb_build_sql(array $meta, array $validated, ?int $cityId = null, ?int $tournId = null, ?string $cityName = null): string
+function cmb_comment_text($s): string
 {
+    $s = (string)$s;
+    // невалидный UTF-8 ломал бы preg_replace(/u) → null → строка с \n осталась бы как есть
+    $s = (string)@iconv('UTF-8', 'UTF-8//IGNORE', $s);
+    $s = str_replace(["\r", "\n"], ' ', $s);
+    $s = preg_replace('/\R+/u', ' ', $s) ?? $s;
+    $s = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\x{2028}\x{2029}]+/u', ' ', $s) ?? $s;
+    $s = preg_replace('/\s+/u', ' ', $s) ?? $s;
+    $s = str_replace(['--', '/*', '*/'], ['—', '', ''], $s);
+    return trim($s);
+}
+
+/**
+ * Игроки, которых по умолчанию НЕ включаем в SQL: имя не совпало с базой или игрок «умер» / «не активен».
+ * Включаются только по явному подтверждению (player_id в $includeIds).
+ * @return list<array>
+ */
+function cmb_questionable(array $validated): array
+{
+    $out = [];
+    foreach ($validated as $p) {
+        if (($p['player_id'] ?? null) === null || ($p['status'] ?? '') === 'unknown_id') {
+            continue; // эти пропускаются всегда
+        }
+        if (($p['status'] ?? '') === 'name_mismatch' || !empty($p['status_warn'])) {
+            $out[] = $p;
+        }
+    }
+    return $out;
+}
+
+function cmb_build_sql(array $meta, array $validated, ?int $cityId = null, ?int $tournId = null, ?string $cityName = null, array $includeIds = []): string
+{
+    $includeIds = array_map('intval', $includeIds);
     $lines = [];
     $region = trim((string)($meta['region'] ?? ''));
     $club = trim((string)($meta['club'] ?? ''));
@@ -598,21 +610,20 @@ function cmb_build_sql(array $meta, array $validated, ?int $cityId = null, ?int 
         $nameBase .= ' клубный';
     }
     $esc = function ($s) {
-        return str_replace(["\\", "'"], ["\\\\", "\\'"], (string)$s);
+        $s = cmb_comment_text((string)$s);
+        return str_replace(["\\", "'"], ["\\\\", "\\'"], $s);
     };
 
-    $lines[] = '-- Клубные МБ (type=5), образец tourn_id=8223 Челябинск клубный';
-    $lines[] = '-- ' . $nameBase . ' | ' . ($df ?? '?') . ' — ' . ($dt ?? '?') . ' | city_id=' . ($cityId ?? 'NULL');
-    $lines[] = '-- results не обновляем (месячные скрипты)';
     $lines[] = 'START TRANSACTION;';
     $lines[] = '';
 
     if ($tournId) {
         $tid = (string)(int)$tournId;
-        $lines[] = "-- Замена данных tourn_id = {$tid}";
-        $lines[] = "DELETE FROM tourn_ind WHERE tour_id = {$tid};";
-        $lines[] = "DELETE FROM results WHERE tourn_id = {$tid};";
-        $lines[] = "DELETE FROM tourn_header WHERE tourn_id = {$tid};";
+        // Только type=5 (клубные МБ). results не трогаем.
+        // Если турнир другого типа — DELETE затронет 0 строк, INSERT упадёт на PK (защита).
+        $lines[] = "DELETE FROM tourn_ind WHERE tour_id = {$tid}"
+            . " AND EXISTS (SELECT 1 FROM tourn_header h WHERE h.tourn_id = {$tid} AND h.type = 5);";
+        $lines[] = "DELETE FROM tourn_header WHERE tourn_id = {$tid} AND type = 5;";
         $lines[] = '';
         $tidSql = $tid;
     } else {
@@ -638,16 +649,22 @@ function cmb_build_sql(array $meta, array $validated, ?int $cityId = null, ?int 
     $lines[] = '  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL';
     $lines[] = ');';
     $lines[] = '';
-    $lines[] = '-- tourn_ind: team_id = player_id, MB; PB=RO=EMB=0, PlaceH=PlaceL=0';
 
     $n = 0;
     foreach ($validated as $p) {
         if (($p['status'] ?? '') === 'unknown_id') {
-            $lines[] = '-- SKIP unknown id ' . ($p['player_id'] ?? '') . ' ' . ($p['name'] ?? '');
+            $lines[] = '-- SKIP unknown id ' . ($p['player_id'] ?? '') . ' ' . cmb_comment_text($p['name'] ?? '');
             continue;
         }
         if (($p['player_id'] ?? null) === null) {
-            $lines[] = '-- SKIP no id: ' . ($p['name'] ?? '');
+            $lines[] = '-- SKIP no id: ' . cmb_comment_text($p['name'] ?? '');
+            continue;
+        }
+        $isQuestionable = (($p['status'] ?? '') === 'name_mismatch') || !empty($p['status_warn']);
+        if ($isQuestionable && !in_array((int)$p['player_id'], $includeIds, true)) {
+            $why = (($p['status'] ?? '') === 'name_mismatch' ? 'имя не совпало с базой' : '') .
+                   (!empty($p['status_warn']) ? ((($p['status'] ?? '') === 'name_mismatch') ? ', ' : '') . $p['status_warn'] : '');
+            $lines[] = '-- SKIP id=' . (int)$p['player_id'] . ' (' . cmb_comment_text($why) . ') ' . cmb_comment_text($p['name'] ?? '') . ' — нужно подтверждение';
             continue;
         }
         $mb = (float)($p['mb'] ?? 0);
@@ -661,7 +678,6 @@ function cmb_build_sql(array $meta, array $validated, ?int $cityId = null, ?int 
         $n++;
     }
     $lines[] = '';
-    $lines[] = "-- игроков с МБ: {$n}";
     $lines[] = 'COMMIT;';
     return implode("\n", $lines) . "\n";
 }
@@ -716,9 +732,16 @@ function cmb_process_report(string $path, string $origName, ?int $forcedCity = n
     $cityId = $cityInfo['city_id'] ?? null;
     $cityError = null;
     $sql = null;
+    $by = (string)($cityInfo['matched_by'] ?? '');
     if ($cityId === null) {
         $cityError = 'Не удалось определить город по региону «' . ($parsed['meta']['region'] ?? '')
             . '». Укажите city_id вручную.';
+    } elseif ($by !== 'manual' && !str_starts_with($by, 'exact:')) {
+        // приблизительное совпадение: SQL не строим, пока человек не подтвердит город
+        $cityError = 'Город определён приблизительно (по региону «' . ($parsed['meta']['region'] ?? '')
+            . '» → «' . ($cityInfo['city_name'] ?? '') . '»). Выберите город вручную и загрузите файл снова.';
+        $cityInfo['city_id'] = null;
+        $cityInfo['suggested'] = $cityId;
     } else {
         $sql = cmb_build_sql($parsed['meta'], $validated, (int)$cityId, $tournId, $cityInfo['city_name'] ?? null);
     }

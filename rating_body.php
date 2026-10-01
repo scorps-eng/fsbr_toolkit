@@ -1,5 +1,16 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__ . '/bootstrap.php';
+
+/** q игрока: предпочитает готовый q, иначе razr+razr_coeff */
+function q_from_player_fields(array $pl): float
+{
+    if (isset($pl['q']) && $pl['q'] !== null && $pl['q'] !== '' && is_numeric($pl['q'])) {
+        return (float)$pl['q'];
+    }
+    return RatingCalculator::qFromRazr($pl['razr'] ?? null, $pl['razr_coeff'] ?? null);
+}
+
 require_once __DIR__ . '/RatingCalculator.php';
 require_once __DIR__ . '/TournamentSuggest.php';
 require_once __DIR__ . '/SqlExporter.php';
@@ -11,9 +22,6 @@ function normalize_team(string $s): string {
     return $s;
 }
 
-function h(?string $s): string {
-    return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-}
 
 $error = null;
 $out = null;
@@ -26,7 +34,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!in_array($format, ['pair', 'team', 'individual'], true)) {
             throw new RuntimeException('Неверный формат турнира');
         }
-        if (!in_array($status, ['express', 'rating', 'regional', 'russian', 'main_russian'], true)) {
+        if (!in_array($status, ['non_rating', 'express', 'rating', 'regional', 'russian', 'main_russian'], true)) {
             throw new RuntimeException('Неверный статус турнира');
         }
         $guaranteed = $_POST['guaranteed'] ?? 'none';
@@ -39,9 +47,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $jsonText = file_get_contents($_FILES['json']['tmp_name']);
         } elseif (!empty($_POST['json_text'])) {
             $jsonText = $_POST['json_text'];
+        } elseif (!empty($_SESSION['report_json'])) {
+            $jsonText = (string)$_SESSION['report_json'];
         }
         if ($jsonText === '' || $jsonText === false) {
-            throw new RuntimeException('Загрузите JSON-отчёт');
+            throw new RuntimeException('Загрузите JSON-отчёт или сначала выполните проверку');
         }
         $data = json_decode($jsonText, true);
         if (!is_array($data)) {
@@ -54,11 +64,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $d = (float)$_POST['length'];
         } elseif (isset($meta['length_actual']) && $meta['length_actual'] !== '' && $meta['length_actual'] !== null) {
             $d = (float)$meta['length_actual'];
-        } elseif (isset($meta['length']) && $meta['length'] !== '' && $meta['length'] !== null) {
-            $d = (float)$meta['length'];
         }
+        // meta.length (плановая) в d не используем
         if ($d === null || $d <= 0) {
-            throw new RuntimeException('Не задана длина турнира (d). Укажите вручную или в meta.length_actual');
+            throw new RuntimeException('Не задана фактическая длина турнира (d). Укажите вручную или meta.length_actual');
         }
 
         // Формат всегда из типа отчёта (JSON), не из ручного выбора
@@ -82,7 +91,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $qs = [];
                 $plist = [];
                 foreach ($players as $pl) {
-                    $q = RatingCalculator::qFromRazr($pl['razr'] ?? null);
+                    $q = q_from_player_fields($pl);
                     $qs[] = $q;
                     $plist[] = [
                         'name' => $pl['name'] ?? '',
@@ -95,7 +104,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!$qs) continue;
                 $qAvg = array_sum($qs) / count($qs);
                 $label = $tm['team'] ?? ('Команда ' . $rank);
-                $calc->addEntry($rank, $qAvg, $label, $plist);
+                $res = (isset($tm['result']) && is_numeric($tm['result'])) ? (0 + $tm['result']) : null;
+                $calc->addEntry($rank, $qAvg, $label, $plist, $res);
             }
         } elseif ($format === 'individual') {
             $pairs = $data['sum']['pairs'] ?? [];
@@ -106,11 +116,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!$p1 && !empty($pair['name'])) {
                     $p1 = $pair;
                 }
-                $q1 = RatingCalculator::qFromRazr($p1['razr'] ?? null);
+                $q1 = q_from_player_fields($p1);
                 $label = trim((string)($p1['name'] ?? ''));
+                $res = (isset($pair['result']) && is_numeric($pair['result'])) ? (0 + $pair['result']) : null;
                 $calc->addEntry($rank, $q1, $label, [
                     ['name' => $p1['name'] ?? '', 'player_id' => $p1['player_id'] ?? null, 'razr' => $p1['razr'] ?? null, 'q' => $q1, 'db_fio' => $p1['db_fio'] ?? null],
-                ]);
+                ], $res);
             }
         } else {
             // pair: from sum.pairs
@@ -120,27 +131,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($rank < 1) continue;
                 $p1 = $pair['player1'] ?? [];
                 $p2 = $pair['player2'] ?? [];
-                $q1 = RatingCalculator::qFromRazr($p1['razr'] ?? null);
-                $q2 = RatingCalculator::qFromRazr($p2['razr'] ?? null);
+                $q1 = q_from_player_fields($p1);
+                $q2 = q_from_player_fields($p2);
                 $qAvg = ($q1 + $q2) / 2.0;
                 $label = trim(($p1['name'] ?? '') . ' — ' . ($p2['name'] ?? ''));
+                $res = (isset($pair['result']) && is_numeric($pair['result'])) ? (0 + $pair['result']) : null;
                 $calc->addEntry($rank, $qAvg, $label, [
                     ['name' => $p1['name'] ?? '', 'player_id' => $p1['player_id'] ?? null, 'razr' => $p1['razr'] ?? null, 'q' => $q1, 'db_fio' => $p1['db_fio'] ?? null],
                     ['name' => $p2['name'] ?? '', 'player_id' => $p2['player_id'] ?? null, 'razr' => $p2['razr'] ?? null, 'q' => $q2, 'db_fio' => $p2['db_fio'] ?? null],
-                ]);
+                ], $res);
             }
         }
 
         $out = $calc->compute();
         $out['meta'] = $meta;
-        // подставить Result (VP/IMP) из исходного JSON по порядку
-        $scores = [];
+        // Result (VP/IMP) уже в каждой записи results[] через addEntry
         if (($out['params']['format'] ?? '') === 'team') {
-            foreach ($data['teams'] ?? [] as $tm) {
-                if (!isset($tm['rank']) || $tm['rank'] === null) continue;
-                $scores[] = isset($tm['result']) && is_numeric($tm['result']) ? (0 + $tm['result']) : null;
-            }
-            // non_counting attach to results by team name
             $ncByTeam = [];
             foreach ($data['teams'] ?? [] as $tm) {
                 $ncByTeam[normalize_team($tm['team'] ?? '')] = $tm['non_counting'] ?? [];
@@ -152,19 +158,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
             unset($rr);
-        } else {
-            foreach ($data['sum']['pairs'] ?? [] as $pair) {
-                if (!isset($pair['rank']) || $pair['rank'] === null) continue;
-                $scores[] = isset($pair['result']) && is_numeric($pair['result']) ? (0 + $pair['result']) : null;
-            }
         }
         $scoreOpts = [];
         foreach ($out['results'] as $i => $r) {
-            if (isset($scores[$i]) && is_numeric($scores[$i])) {
-                $scoreOpts[$i] = 0 + $scores[$i];
-            } else {
-                $scoreOpts[$i] = null;
-            }
+            $scoreOpts[$i] = isset($r['result']) && is_numeric($r['result']) ? (0 + $r['result']) : null;
         }
         $out['scores_opts'] = $scoreOpts;
 
@@ -197,6 +194,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ];
                 continue;
             }
+            if ($sessD < 14) {
+                $sessionResults[] = [
+                    'name' => $sessName,
+                    'boards' => $sessD,
+                    'skipped' => true,
+                    'error' => 'МБ сессии не считаются: длина ' . $sessD . ' < 14 сдач',
+                    'results' => [],
+                ];
+                continue;
+            }
             $sc = new RatingCalculator($format, $status, $sessD, 'none');
             $pairs = $sess['pairs'] ?? [];
             foreach ($pairs as $pair) {
@@ -209,20 +216,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $p1 = ['name' => $pair['name1'] ?? '', 'player_id' => $pair['id1'] ?? null, 'razr' => $pair['razr1'] ?? null];
                     $p2 = ['name' => $pair['name2'] ?? '', 'player_id' => $pair['id2'] ?? null, 'razr' => $pair['razr2'] ?? null];
                 }
-                $q1 = RatingCalculator::qFromRazr($p1['razr'] ?? null);
+                $q1 = q_from_player_fields($p1);
+                $sessRes = (isset($pair['result']) && is_numeric($pair['result'])) ? (0 + $pair['result']) : null;
                 if ($format === 'individual') {
                     $label = trim((string)($p1['name'] ?? ''));
                     $sc->addEntry($rank, $q1, $label, [
                         ['name' => $p1['name'] ?? '', 'player_id' => $p1['player_id'] ?? ($p1['id'] ?? null), 'razr' => $p1['razr'] ?? null, 'q' => $q1],
-                    ]);
+                    ], $sessRes);
                 } else {
-                    $q2 = RatingCalculator::qFromRazr($p2['razr'] ?? null);
+                    $q2 = q_from_player_fields($p2);
                     $qAvg = ($q1 + $q2) / 2.0;
                     $label = trim(($p1['name'] ?? '') . ' — ' . ($p2['name'] ?? ''));
                     $sc->addEntry($rank, $qAvg, $label, [
                         ['name' => $p1['name'] ?? '', 'player_id' => $p1['player_id'] ?? ($p1['id'] ?? null), 'razr' => $p1['razr'] ?? null, 'q' => $q1],
                         ['name' => $p2['name'] ?? '', 'player_id' => $p2['player_id'] ?? ($p2['id'] ?? null), 'razr' => $p2['razr'] ?? null, 'q' => $q2],
-                    ]);
+                    ], $sessRes);
                 }
             }
             if (count($sc->entries) < 1) {
@@ -230,21 +238,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             try {
                 $sessOut = $sc->computeSessionMb();
-                // подставить Result из протокола
-                $scoreByRank = [];
-                foreach ($pairs as $pair) {
-                    $rk = (int)($pair['rank'] ?? 0);
-                    if ($rk && isset($pair['result']) && is_numeric($pair['result'])) {
-                        $scoreByRank[$rk] = 0 + $pair['result'];
-                    }
-                }
-                foreach ($sessOut['results'] as &$sr0) {
-                    $rk = (int)$sr0['rank'];
-                    if (isset($scoreByRank[$rk])) {
-                        $sr0['result'] = $scoreByRank[$rk];
-                    }
-                }
-                unset($sr0);
+                // Result уже в results[] из addEntry
                 $sessionResults[] = [
                     'name' => $sessName,
                     'boards' => $sessD,
@@ -306,6 +300,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $statusLabels = [
+    'non_rating' => 'Не рейтинговый (только МБ)',
     'express' => 'Экспресс',
     'rating' => 'Рейтинговый',
     'regional' => 'Региональный чемпионат',
@@ -326,6 +321,7 @@ select,input[type=number],textarea,input[type=file]{width:100%;padding:10px;bord
 textarea{min-height:120px;font-family:ui-monospace,monospace;font-size:.85rem}
 .btn{display:block;width:100%;margin-top:16px;background:var(--accent);color:#fff;border:0;padding:12px;border-radius:8px;font-size:1rem;cursor:pointer}
 .flash{background:rgba(239,68,68,.15);color:#fca5a5;padding:12px;border-radius:8px;margin-bottom:16px}
+.okbox{background:rgba(34,197,94,.12);color:#86efac;padding:12px;border-radius:8px}
 .params{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:16px 0}
 .param{background:var(--card);border-radius:10px;padding:12px;text-align:center}
 .param .v{font-size:1.2rem;font-weight:700}
@@ -344,23 +340,62 @@ h1{font-size:1.35rem;margin:0 0 8px}
 <?php if ($out === null): ?>
   <div class="card">
     <h1>Расчёт РО, ПБ и МБ</h1>
-    <p class="sub">Загрузите JSON из проверки отчёта турнира. Формулы — по <a href="https://www.bridgesport.ru/materials/sports-classification/" target="_blank" rel="noopener">спортивной классификации ФСБР</a>.</p>
+    <?php
+      $prefillJson = $GLOBALS['prefill_json'] ?? '';
+      if ($prefillJson === '' && !empty($_SESSION['report_json'])) {
+          $prefillJson = (string)$_SESSION['report_json'];
+      }
+      if ($prefillJson === '' && !empty($_POST['json_text'])) {
+          $prefillJson = (string)$_POST['json_text'];
+      }
+      $hasPrefill = is_string($prefillJson) && trim($prefillJson) !== '';
+    ?>
+    <p class="sub"><?php if ($hasPrefill): ?>
+      Отчёт уже передан с шага проверки. Укажите параметры и нажмите «Рассчитать».
+    <?php else: ?>
+      Загрузите JSON из проверки отчёта турнира.
+    <?php endif; ?>
+      Формулы — по <a href="https://www.bridgesport.ru/materials/sports-classification/" target="_blank" rel="noopener">спортивной классификации ФСБР</a>.</p>
     <?php if ($error): ?><div class="flash"><?= h($error) ?></div><?php endif; ?>
-    <form method="post" enctype="multipart/form-data">
+    <form method="post" enctype="multipart/form-data"><?= csrf_field() ?>
       <input type="hidden" name="tab" value="rating">
+      <?php if ($hasPrefill): ?>
+      <input type="hidden" name="from_session" value="1">
+      <?php
+        $preTmp = json_decode($prefillJson, true);
+        $preTitle = is_array($preTmp) ? (string)($preTmp['meta']['title'] ?? '') : '';
+        $preFmt = is_array($preTmp) ? (string)($preTmp['format'] ?? '') : '';
+        $preN = 0;
+        if (is_array($preTmp)) {
+          if (!empty($preTmp['sum']['pairs'])) $preN = count($preTmp['sum']['pairs']);
+          elseif (!empty($preTmp['teams'])) $preN = count($preTmp['teams']);
+          elseif (!empty($preTmp['results'])) $preN = count($preTmp['results']);
+        }
+      ?>
+      <div class="okbox" style="margin-bottom:14px">
+        Отчёт загружен с проверки
+        <?php if ($preTitle !== ''): ?> — <b><?= h($preTitle) ?></b><?php endif; ?>
+        <?php if ($preFmt !== ''): ?> · <?= h($preFmt) ?><?php endif; ?>
+        <?php if ($preN): ?> · участников: <?= (int)$preN ?><?php endif; ?>
+        
+      </div>
+      <?php else: ?>
       <label>JSON-отчёт</label>
       <input type="file" name="json" accept=".json,application/json">
       <label>или вставьте JSON</label>
-      <textarea name="json_text" placeholder='{"format":"pair","meta":{...},"sum":{"pairs":[...]}}'><?= h($GLOBALS["prefill_json"] ?? ($_POST["json_text"] ?? "")) ?></textarea>
+      <textarea name="json_text" placeholder='{"format":"pair","meta":{...},"sum":{"pairs":[...]}}'></textarea>
+      <?php endif; ?>
 
       <?php
         $suggestTitle = '';
         $fmtFromReport = 'pair';
         $tmp = null;
-        if (!empty($_POST['json_text'])) {
-          $tmp = json_decode((string)$_POST['json_text'], true);
-        } elseif (!empty($GLOBALS['prefill_json'])) {
+        if (!empty($GLOBALS['prefill_json'])) {
           $tmp = json_decode((string)$GLOBALS['prefill_json'], true);
+        } elseif (!empty($_SESSION['report_json'])) {
+          $tmp = json_decode((string)$_SESSION['report_json'], true);
+        } elseif (!empty($_POST['json_text'])) {
+          $tmp = json_decode((string)$_POST['json_text'], true);
         }
         if (is_array($tmp)) {
           $suggestTitle = (string)($tmp['meta']['title'] ?? '');
@@ -378,59 +413,42 @@ h1{font-size:1.35rem;margin:0 0 8px}
         <option value="<?= h($k) ?>" <?= $k===$fmtFromReport?'selected':'' ?>><?= h($v) ?></option>
         <?php endforeach; ?>
       </select>
-      <p class="note">Формат берётся из типа отчёта (<?= h($fmtFromReport) ?>); при расчёте приоритет у JSON.</p>
-
       <?php
+        // фактическая длина — для подсказки статуса и расчёта
+        $defaultD = $_POST['length'] ?? '';
+        if ($defaultD === '' && is_array($tmp ?? null)) {
+          if (isset($tmp['meta']['length_actual']) && $tmp['meta']['length_actual'] !== '' && $tmp['meta']['length_actual'] !== null) {
+            $defaultD = (string)(0 + $tmp['meta']['length_actual']);
+          }
+          // плановую length в d не подставляем автоматически
+        }
+        $dForStatus = ($defaultD !== '' && is_numeric($defaultD)) ? (float)$defaultD : null;
         $stGuess = $_POST['status'] ?? 'rating';
-        $gSug = TournamentSuggest::suggestGuaranteed($suggestTitle, $fmtGuess, $stGuess);
-        $sSug = TournamentSuggest::suggestStatus($suggestTitle, $stGuess);
+        $sSug = TournamentSuggest::suggestStatus($suggestTitle, 'rating', $dForStatus, $fmtGuess);
+        $gSug = TournamentSuggest::suggestGuaranteed($suggestTitle, $fmtGuess, $sSug['status']);
         $defaultG = $_POST['guaranteed'] ?? $gSug['key'];
         $defaultS = $_POST['status'] ?? $sSug['status'];
       ?>
+      <label>Фактическая длина d (сдач)</label>
+      <input type="number" name="length" step="1" min="1" value="<?= h((string)$defaultD) ?>" placeholder="meta.length_actual">
+
       <label>Статус</label>
       <select name="status">
         <?php foreach ($statusLabels as $k=>$v): ?>
         <option value="<?= h($k) ?>" <?= $k===$defaultS?'selected':'' ?>><?= h($v) ?></option>
         <?php endforeach; ?>
       </select>
-      <?php if ($suggestTitle !== ''): ?>
-      <p class="note">Подсказка статуса: <b><?= h($sSug['status']) ?></b> — <?= h($sSug['reason']) ?></p>
-      <?php endif; ?>
 
-      <label>Гарантированные ПБ (Прил. 1)</label>
+      <label>Гарантированные ПБ</label>
       <select name="guaranteed">
         <?php foreach (RatingCalculator::GUARANTEED_PB_LABELS as $k=>$v): ?>
         <option value="<?= h($k) ?>" <?= ($k===$defaultG)?'selected':'' ?>><?= h($v) ?></option>
         <?php endforeach; ?>
       </select>
-      <?php if ($suggestTitle !== ''): ?>
-      <p class="note">Подсказка ПБ: <b><?= h($gSug['label']) ?></b> (<?= h($gSug['confidence']) ?>) — <?= h($gSug['reason']) ?></p>
-      <?php endif; ?>
-
-      <?php
-        $defaultD = $_POST['length'] ?? '';
-        if ($defaultD === '' && is_array($tmp ?? null)) {
-          if (isset($tmp['meta']['length_actual']) && $tmp['meta']['length_actual'] !== '' && $tmp['meta']['length_actual'] !== null) {
-            $defaultD = (string)(0 + $tmp['meta']['length_actual']);
-          } elseif (isset($tmp['meta']['length']) && $tmp['meta']['length'] !== '' && $tmp['meta']['length'] !== null) {
-            $defaultD = (string)(0 + $tmp['meta']['length']);
-          }
-        }
-      ?>
-      <label>Фактическая длина d (сдач)</label>
-      <input type="number" name="length" step="1" min="1" value="<?= h((string)$defaultD) ?>" placeholder="из отчёта: meta.length_actual">
-      <?php if ($defaultD !== ''): ?>
-      <p class="note">Подставлено из отчёта: <b><?= h((string)$defaultD) ?></b> (фактическая длина / длина турнира)</p>
-      <?php endif; ?>
 
       <button class="btn" type="submit">Рассчитать</button>
     </form>
-    <p class="note">
-      q = razr/2; если razr ≥ 95 то (razr − 100)/2 (нет в базе → 5). Разряд пары/команды — среднее q игроков.<br>
-      N0 — число участников с q ≤ 0. К RC: +1 (ЧР / основной ЧР), +0.5 (РЧ).<br>
-      После расчёта — вкладка «SQL» (champ_t, tourn_id). Гарантированные ПБ (Прил. 1) пока не учитываются.
-    </p>
-  </div>
+    </div>
 <?php else: ?>
   <p><a href="?tab=rating">← Новый расчёт</a>
     · <button type="button" id="btn-json" style="background:var(--accent);color:#fff;border:0;padding:6px 12px;border-radius:6px;cursor:pointer">Скачать JSON</button>
@@ -458,8 +476,7 @@ h1{font-size:1.35rem;margin:0 0 8px}
   </div>
 
   <?php if (empty($out['sessions'])): ?>
-  <p class="note" style="margin:12px 0">В JSON нет сессий/этапов — МБ по сессиям не считались. На шаге проверки должны быть листы «Сессия», «Финал», «Отбор» и т.п.</p>
-  <?php endif; ?>
+    <?php endif; ?>
 
   <table>
     <tr>
@@ -520,7 +537,7 @@ h1{font-size:1.35rem;margin:0 0 8px}
           <td><?php
             $bits = [];
             foreach ($r['players'] ?? [] as $pl) {
-              $bits[] = h($pl['name'] ?? '') . (isset($pl['player_id']) ? ' ('.$pl['player_id'].')' : '');
+              $bits[] = h($pl['name'] ?? '') . (isset($pl['player_id']) ? ' ('.h($pl['player_id']).')' : '');
             }
             echo implode(', ', $bits);
           ?></td>
@@ -551,13 +568,12 @@ h1{font-size:1.35rem;margin:0 0 8px}
 
   <section style="background:var(--card);border-radius:12px;padding:18px;margin-top:20px">
     <h2 style="margin:0 0 10px;font-size:1.05rem">Дальше: SQL</h2>
-    <p class="sub">На следующем шаге укажите champ_t и при необходимости tourn_id, city_id.</p>
-    <a class="btn" style="display:inline-block;width:auto;padding:10px 18px;text-decoration:none;background:#22c55e" href="?tab=sql">Перейти к подготовке SQL →</a>
+        <a class="btn" style="display:inline-block;width:auto;padding:10px 18px;text-decoration:none;background:#22c55e" href="?tab=sql">Перейти к подготовке SQL →</a>
   </section>
 
   <script>
   document.getElementById('btn-json').onclick = function() {
-    var data = <?= json_encode($out, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT) ?>;
+    var data = <?= json_encode($out, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE) ?>;
     var blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json;charset=utf-8'});
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);

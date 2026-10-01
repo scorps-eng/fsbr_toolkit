@@ -28,23 +28,13 @@ declare(strict_types=1);
  *   club_id SMALLINT UNSIGNED NULL
  * ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
  */
-session_start();
+require_once __DIR__ . '/bootstrap.php';
+app_session_start();
+csrf_enforce(); // публичная форма, но POST только с токеном
 
-$CONFIG = file_exists(__DIR__ . '/config.php')
-    ? require __DIR__ . '/config.php'
-    : (file_exists(__DIR__ . '/config.example.php') ? require __DIR__ . '/config.example.php' : null);
-
-function h(?string $s): string {
-    return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-}
 
 function db(): ?mysqli {
-    global $CONFIG;
-    if (!$CONFIG) return null;
-    $m = @new mysqli($CONFIG['db_host'], $CONFIG['db_user'], $CONFIG['db_pass'], $CONFIG['db_name']);
-    if ($m->connect_errno) return null;
-    $m->set_charset('utf8mb4');
-    return $m;
+    return db_questionnaire(); // отдельная учётка: INSERT только в aux_questionaries
 }
 
 // --- AJAX: поиск игроков ---
@@ -317,7 +307,7 @@ if ($mysqli) {
     Фото на сайт: отправьте на dihnova@ya.ru с указанием ID игрока.
   </div>
 
-  <form method="post" id="anketa-form" class="card">
+  <form method="post" id="anketa-form" class="card"><?= csrf_field() ?>
     <input type="hidden" name="submit_anketa" value="1">
     <input type="hidden" name="player_id" id="player_id" value="">
 

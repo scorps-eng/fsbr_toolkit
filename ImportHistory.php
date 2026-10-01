@@ -8,11 +8,19 @@ class ImportHistory
 {
     public static function path(): string
     {
-        $dir = __DIR__ . '/data';
-        if (!is_dir($dir)) {
-            @mkdir($dir, 0755, true);
+        require_once __DIR__ . '/bootstrap.php';
+        $new = app_data_dir() . '/import_log.json.php'; // PHP-файл с exit: по URL содержимое не отдаётся
+        $old = app_data_dir() . '/import_log.json';   // старый открытый лог — переносим и удаляем
+        if (is_file($old)) {
+            if (!is_file($new)) {
+                $d = json_decode((string)@file_get_contents($old), true);
+                if (is_array($d)) {
+                    data_write_json($new, $d, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+                }
+            }
+            @unlink($old);
         }
-        return $dir . '/import_log.json';
+        return $new;
     }
 
     /** @return list<array> */
@@ -22,11 +30,7 @@ class ImportHistory
         if (!is_file($file)) {
             return [];
         }
-        $raw = @file_get_contents($file);
-        $data = json_decode((string)$raw, true);
-        if (!is_array($data)) {
-            return [];
-        }
+        $data = data_read_json($file);
         // newest first
         usort($data, function ($a, $b) {
             return strcmp((string)($b['ts'] ?? ''), (string)($a['ts'] ?? ''));
@@ -37,14 +41,7 @@ class ImportHistory
     public static function add(array $entry): void
     {
         $file = self::path();
-        $data = [];
-        if (is_file($file)) {
-            $raw = @file_get_contents($file);
-            $decoded = json_decode((string)$raw, true);
-            if (is_array($decoded)) {
-                $data = $decoded;
-            }
-        }
+        $data = data_read_json($file);
         $entry['ts'] = $entry['ts'] ?? date('c');
         $entry['id'] = $entry['id'] ?? bin2hex(random_bytes(6));
         $data[] = $entry;
@@ -52,7 +49,7 @@ class ImportHistory
         if (count($data) > 500) {
             $data = array_slice($data, -500);
         }
-        @file_put_contents($file, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), LOCK_EX);
+        data_write_json($file, $data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
     }
 
     /**

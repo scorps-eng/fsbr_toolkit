@@ -1,24 +1,106 @@
 <?php
 declare(strict_types=1);
+
+function sql_check_overwrite(?int $tournId, int $expectedType): ?string
+{
+    if ($tournId === null || $tournId < 1) {
+        return null;
+    }
+    if (!defined('DB_HOST')) {
+        return "Перезапись tourn_id={$tournId}: проверка типа в БД недоступна (нет config.php). SQL защищён условием type={$expectedType}.";
+    }
+    $mysqli = db_ro(); // чтение
+    if ($mysqli === null) {
+        return 'Не удалось проверить tourn_id (нет связи с БД)';
+    }
+    try {
+        require_once __DIR__ . '/SqlExporter.php';
+        // чужой тип → исключение (перезапись запрещена)
+        $info = SqlExporter::checkOverwrite($mysqli, $tournId, $expectedType, true);
+        return $info['preview'];
+    } finally {
+        $mysqli->close();
+    }
+}
+
 require_once __DIR__ . '/SqlExporter.php';
 require_once __DIR__ . '/TournamentSuggest.php';
 require_once __DIR__ . '/ImportHistory.php';
 require_once __DIR__ . '/ClubMb.php';
-if (file_exists(__DIR__ . '/config.php')) {
-    $CONFIG = require __DIR__ . '/config.php';
+require_once __DIR__ . '/bootstrap.php';
+
+/**
+ * Проверка prev_id перед формированием SQL.
+ * Ошибка — если prev не существует, это сессия, совпадает с tourn_id; требует подтверждения (confirm_prev) —
+ * если у предыдущего турнира уже есть другой next_id или он не раньше нового по дате.
+ */
+function sql_check_prev(?int $prev, ?int $self, string $newFrom, bool $confirmed): void
+{
+    if ($prev === null) {
+        return;
+    }
+    if ($self !== null && $prev === $self) {
+        throw new InvalidArgumentException('prev_id не может совпадать с tourn_id');
+    }
     if (!defined('DB_HOST')) {
-        define('DB_HOST', $CONFIG['db_host']);
-        define('DB_USER', $CONFIG['db_user']);
-        define('DB_PASS', $CONFIG['db_pass']);
-        define('DB_NAME', $CONFIG['db_name']);
+        return;
+    }
+    $db = db_ro();
+    if ($db === null) {
+        return; // проверить нельзя; ошибка проявится при выполнении
+    }
+    try {
+        $h = TournamentSuggest::fetchHeader($db, $prev);
+    } finally {
+        $db->close();
+    }
+    if (!$h) {
+        throw new InvalidArgumentException("prev_id={$prev}: турнир не найден в базе");
+    }
+    if ((int)($h['type'] ?? 0) === 4 || !empty($h['parent'])) {
+        throw new InvalidArgumentException("prev_id={$prev} — это сессия, а не турнир");
+    }
+    $warn = [];
+    $next = isset($h['next_id']) && $h['next_id'] !== '' && $h['next_id'] !== null ? (int)$h['next_id'] : null;
+    if ($next !== null && $next !== (int)$self) {
+        $warn[] = "у турнира #{$prev} уже указан следующий #{$next} — эта связь будет заменена";
+    }
+    $pd = substr((string)($h['tour_date'] ?? ''), 0, 10);
+    if ($pd !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $newFrom) && $pd >= $newFrom) {
+        $warn[] = "предыдущий турнир #{$prev} датирован {$pd} — не раньше нового ({$newFrom})";
+    }
+    if ($warn && !$confirmed) {
+        $GLOBALS['need_relink'] = true;
+        throw new InvalidArgumentException(implode('; ', $warn) . '. Отметьте подтверждение под полем prev_id и сформируйте SQL ещё раз.');
     }
 }
 
-if (!function_exists('h')) {
-    function h(?string $s): string {
-        return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+/** Положительное целое из POST; пусто → null; мусор / 0 → исключение (а не молчаливый 0). */
+function post_pos_int(string $key, string $label): ?int
+{
+    $v = trim((string)($_POST[$key] ?? ''));
+    if ($v === '') {
+        return null;
     }
+    if (!ctype_digit($v) || (int)$v < 1) {
+        throw new InvalidArgumentException("{$label}: ожидается целое число ≥ 1");
+    }
+    return (int)$v;
 }
+
+/** Целое (возможно 0 или отрицательное) из POST; пусто → null; мусор → исключение. */
+function post_int(string $key, string $label): ?int
+{
+    $v = trim((string)($_POST[$key] ?? ''));
+    if ($v === '') {
+        return null;
+    }
+    if (!preg_match('/^-?\d+$/', $v)) {
+        throw new InvalidArgumentException("{$label}: ожидается целое число");
+    }
+    return (int)$v;
+}
+
 
 $error = null;
 $sqlText = null;
@@ -50,10 +132,8 @@ if ($isClubMb && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ($_POST['tab']
     try {
         $players = $clubMbReport['players'] ?? [];
         $meta = $clubMbReport['meta'] ?? [];
-        $cityId = (!empty($_POST['city_id']) && ctype_digit((string)$_POST['city_id']))
-            ? (int)$_POST['city_id'] : null;
-        $tournId = (!empty($_POST['tourn_id']) && ctype_digit((string)$_POST['tourn_id']))
-            ? (int)$_POST['tourn_id'] : null;
+        $cityId = post_pos_int('city_id', 'city_id');
+        $tournId = post_pos_int('tourn_id', 'tourn_id');
         if ($cityId === null) {
             throw new RuntimeException('Выберите город — для клубных МБ city_id обязателен');
         }
@@ -69,7 +149,13 @@ if ($isClubMb && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ($_POST['tab']
         if (!$cityName) {
             throw new RuntimeException('Город id=' . $cityId . ' не найден в cities');
         }
-        $sqlText = cmb_build_sql($meta, $players, $cityId, $tournId, $cityName);
+        $overwriteNote = sql_check_overwrite($tournId, 5);
+        if ($overwriteNote) {
+            // показываем в форме
+            $GLOBALS['overwrite_preview'] = $overwriteNote;
+        }
+        $includeIds = array_values(array_filter(array_map('intval', (array)($_POST['include_ids'] ?? [])), fn($v) => $v > 0));
+        $sqlText = cmb_build_sql($meta, $players, $cityId, $tournId, $cityName, $includeIds);
         $_SESSION['club_mb_sql'] = $sqlText;
         $clubMbSql = $sqlText;
         $_SESSION['club_mb_report'] = array_merge($clubMbReport, [
@@ -95,17 +181,39 @@ if (!$isClubMb && $_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['tab'] ?? '')
         if (empty($ratingOut) || empty($ratingOut['results'])) {
             throw new RuntimeException('Нет данных расчёта. Сначала выполните шаг «Расчёт РО / ПБ / МБ».');
         }
+        $owTid = post_pos_int('tourn_id', 'tourn_id');
+        $cityIn = post_pos_int('city_id', 'city_id');
+        $prevIn = post_pos_int('prev_id', 'prev_id');
+        $champIn = post_int('champ_t', 'champ_t');
+        $statusIn = post_int('status_db', 'status');
+        $streamIn = post_int('stream', 'stream');
+        $dFrom = trim((string)($_POST['date_from'] ?? ''));
+        $dTo = trim((string)($_POST['date_to'] ?? ''));
+        foreach (['Дата начала' => $dFrom, 'Дата окончания' => $dTo] as $lbl => $dv) {
+            if ($dv !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dv)) {
+                throw new InvalidArgumentException("{$lbl}: формат YYYY-MM-DD");
+            }
+        }
+        sql_check_prev($prevIn, $owTid,
+            $dFrom !== '' ? $dFrom : (string)($ratingOut['meta']['date_from'] ?? ''),
+            !empty($_POST['confirm_prev']));
+        $owFmt = $ratingOut['params']['format'] ?? 'pair';
+        $owType = SqlExporter::formatToType($owFmt);
+        $overwriteNote = sql_check_overwrite($owTid, $owType);
+        if ($overwriteNote) {
+            $GLOBALS['overwrite_preview'] = $overwriteNote;
+        }
         $sqlText = SqlExporter::build($ratingOut, [
             'scores' => $ratingOut['scores_opts'] ?? [],
-            'tourn_id' => ($_POST['tourn_id'] ?? '') !== '' ? (int)$_POST['tourn_id'] : null,
-            'city_id' => ($_POST['city_id'] ?? '') !== '' ? (int)$_POST['city_id'] : 'NULL',
-            'champ_t' => ($_POST['champ_t'] ?? '') !== '' ? (int)$_POST['champ_t'] : null,
-            'status_db' => ($_POST['status_db'] ?? '') !== '' ? (int)$_POST['status_db'] : 'NULL',
-            'stream' => ($_POST['stream'] ?? '') !== '' ? (int)$_POST['stream'] : 'NULL',
-            'prev_id' => ($_POST['prev_id'] ?? '') !== '' ? (int)$_POST['prev_id'] : null,
+            'tourn_id' => $owTid,
+            'city_id' => $cityIn ?? 'NULL',
+            'champ_t' => $champIn,
+            'status_db' => $statusIn ?? 'NULL',
+            'stream' => $streamIn ?? 'NULL',
+            'prev_id' => $prevIn,
             'name' => trim((string)($_POST['tourn_name'] ?? '')),
-            'date_from' => trim((string)($_POST['date_from'] ?? '')),
-            'date_to' => trim((string)($_POST['date_to'] ?? '')),
+            'date_from' => $dFrom,
+            'date_to' => $dTo,
         ]);
         $_SESSION['last_sql'] = $sqlText;
     } catch (Throwable $e) {
@@ -123,20 +231,36 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ($_POST['tab'] ?? '') === '
         $sqlRun = (string)$_SESSION['last_sql'];
     }
     $sqlText = $sqlRun !== '' ? $sqlRun : $sqlText;
+
+    // одноразовый ключ выполнения: повтор POST (F5, двойной клик) не создаст дубль турнира
+    $nonceSent = (string)($_POST['run_nonce'] ?? '');
+    $nonceHave = (string)($_SESSION['run_nonce'] ?? '');
+    $nonceOk = $nonceHave !== '' && hash_equals($nonceHave, $nonceSent);
+    unset($_SESSION['run_nonce']); // сгорает в любом случае
+
+    // выполняем только SQL, сформированный самим приложением в этой сессии
+    $allowed = [];
+    foreach ([$_SESSION['last_sql'] ?? null, $_SESSION['club_mb_sql'] ?? null,
+              is_array($_SESSION['club_mb_report'] ?? null) ? ($_SESSION['club_mb_report']['sql'] ?? null) : null] as $cand) {
+        if (is_string($cand) && $cand !== '') {
+            $allowed[] = hash('sha256', sql_normalize($cand));
+        }
+    }
+    $matches = in_array(hash('sha256', sql_normalize($sqlRun)), $allowed, true);
+    $allowEdit = !empty(app_config()['allow_edit_sql']);
+
     if ($sqlRun === '') {
         $error = 'Нет SQL для выполнения';
     } elseif (empty($_POST['confirm_run'])) {
         $error = 'Отметьте подтверждение перед выполнением SQL';
+    } elseif (!$nonceOk) {
+        $error = 'Этот запрос уже выполнялся или устарел. Сформируйте SQL заново и повторите.';
+    } elseif (!$matches && !$allowEdit) {
+        $error = 'SQL не совпадает с сформированным приложением (правка вручную запрещена). Сформируйте SQL заново.';
     } else {
+        $mysqli = null;
         try {
-            if (!defined('DB_HOST')) {
-                throw new RuntimeException('Нет настроек БД (config.php)');
-            }
-            $mysqli = @new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
-            if ($mysqli->connect_errno) {
-                throw new RuntimeException('Подключение: ' . $mysqli->connect_error);
-            }
-            $mysqli->set_charset('utf8mb4');
+            $mysqli = db_rw(); // отдельная учётка: права только на нужные таблицы
             // multi_query: START TRANSACTION … COMMIT
             if (!$mysqli->multi_query($sqlRun)) {
                 throw new RuntimeException($mysqli->error);
@@ -180,6 +304,10 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ($_POST['tab'] ?? '') === '
                 'ok' => true,
             ]);
         } catch (Throwable $e) {
+            // откат: иначе при ошибке посреди скрипта транзакция остаётся открытой
+            if ($mysqli instanceof mysqli) {
+                try { @$mysqli->rollback(); @$mysqli->close(); } catch (Throwable $e2) { /* ignore */ }
+            }
             $execOk = false;
             $error = 'Ошибка выполнения: ' . $e->getMessage();
             ImportHistory::add([
@@ -189,6 +317,11 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ($_POST['tab'] ?? '') === '
             ]);
         }
     }
+}
+
+// новый одноразовый ключ для формы выполнения (если на странице есть SQL)
+if (!empty($sqlText)) {
+    $_SESSION['run_nonce'] = bin2hex(random_bytes(16));
 }
 ?>
 <style>
@@ -205,7 +338,7 @@ h1{font-size:1.35rem;margin:0 0 8px}
 
 <div class="card">
   <h1>Подготовка SQL</h1>
-  <p class="sub">Турнир: <code>tourn_header</code> + pair/team/ind/ses. Клубные МБ: type=5, <code>tourn_ind</code> (team_id = player_id). Таблица <code>results</code> не трогаем — её обновляют месячные скрипты.</p>
+  <p class="sub">Подготовка SQL для записи турнира или клубных МБ в базу.</p>
 
   <?php if ($isClubMb): ?>
     <?php if ($error): ?><div class="flash"><?= h($error) ?></div><?php endif; ?>
@@ -224,7 +357,7 @@ h1{font-size:1.35rem;margin:0 0 8px}
     <?php endif; ?>
 
     <p class="note">
-      Клубные МБ (type=5) · регион: <b><?= h($clubMbReport['meta']['region'] ?? '—') ?></b>
+      Клубные МБ · регион: <b><?= h($clubMbReport['meta']['region'] ?? '—') ?></b>
       · игроков: <?= (int)count($clubMbReport['players'] ?? []) ?>
       · период: <?= h(($clubMbReport['meta']['date_from'] ?? '?') . ' — ' . ($clubMbReport['meta']['date_to'] ?? '?')) ?>
     </p>
@@ -245,7 +378,7 @@ h1{font-size:1.35rem;margin:0 0 8px}
           }
       }
     ?>
-    <form method="post">
+    <form method="post"><?= csrf_field() ?>
       <input type="hidden" name="tab" value="sql">
       <input type="hidden" name="build_club_sql" value="1">
 
@@ -264,15 +397,38 @@ h1{font-size:1.35rem;margin:0 0 8px}
       <p class="note">Название будет: <b>{Город} клубный</b></p>
       <?php endif; ?>
 
-      <label>tourn_id (опционально — перезаписать существующий)</label>
+      <label>tourn_id (опционально — перезаписать существующий type=5)</label>
       <input type="number" name="tourn_id" min="1" value="<?= h((string)$selTourn) ?>" placeholder="пусто = новый ID">
+      <?php if (!empty($GLOBALS['overwrite_preview'])): ?>
+      <p class="note" style="color:var(--warn)"><?= h($GLOBALS['overwrite_preview']) ?></p>
+      <?php endif; ?>
 
-      <button class="btn" type="submit">Сформировать SQL</button>
+<?php $cmbQ = cmb_questionable($clubMbReport['players'] ?? []); $cmbInc = array_map('intval', (array)($_POST['include_ids'] ?? [])); ?>
+      <?php if ($cmbQ): ?>
+      <div style="margin-top:14px;padding:12px;border:1px solid var(--warn);border-radius:10px">
+        <b style="color:var(--warn)">Требуют подтверждения (по умолчанию в SQL не попадают): <?= count($cmbQ) ?></b>
+        <p class="note" style="margin:6px 0">Имя в отчёте не совпало с базой по ID, либо игрок «умер» / «не активен». Отметьте тех, кого нужно включить, и сформируйте SQL заново.</p>
+        <table style="width:100%;font-size:.85rem;border-collapse:collapse">
+          <tr style="color:var(--muted);text-align:left"><th></th><th>ID</th><th>В отчёте</th><th>В базе</th><th>МБ</th><th>Причина</th></tr>
+          <?php foreach ($cmbQ as $qp): ?>
+          <tr>
+            <td><input type="checkbox" name="include_ids[]" value="<?= (int)$qp['player_id'] ?>" <?= in_array((int)$qp['player_id'], $cmbInc, true) ? 'checked' : '' ?>></td>
+            <td><?= (int)$qp['player_id'] ?></td>
+            <td><?= h((string)($qp['name'] ?? '')) ?></td>
+            <td><?= h((string)($qp['db_fio'] ?? '')) ?></td>
+            <td><?= h((string)($qp['mb'] ?? '')) ?></td>
+            <td><?= h(trim((($qp['status'] ?? '') === 'name_mismatch' ? 'имя не совпало ' : '') . (string)($qp['status_warn'] ?? ''))) ?></td>
+          </tr>
+          <?php endforeach; ?>
+        </table>
+      </div>
+      <?php endif; ?>
+            <button class="btn" type="submit">Сформировать SQL</button>
     </form>
 
     <?php if ($sqlText): ?>
     <h2 style="margin-top:24px;font-size:1.05rem">SQL</h2>
-    <form method="post" id="form-run-sql" onsubmit="return confirm('Выполнить SQL клубных МБ?');">
+    <form method="post" id="form-run-sql" onsubmit="return confirm('Выполнить SQL клубных МБ?');"><?= csrf_field() ?><input type="hidden" name="run_nonce" value="<?= h((string)($_SESSION['run_nonce'] ?? '')) ?>">
       <input type="hidden" name="tab" value="sql">
       <input type="hidden" name="run_sql" value="1">
       <textarea id="sql-out" name="sql_script" style="min-height:320px;font-family:ui-monospace,monospace;font-size:.8rem;width:100%;padding:10px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:var(--text)"><?= h($sqlText) ?></textarea>
@@ -316,6 +472,11 @@ h1{font-size:1.35rem;margin:0 0 8px}
       $defFrom = $_POST['date_from'] ?? ($meta['date_from'] ?? '');
       $defTo = $_POST['date_to'] ?? ($meta['date_to'] ?? '');
 
+      $selfTid = (ctype_digit((string)($_POST['tourn_id'] ?? '')) && (int)$_POST['tourn_id'] >= 1) ? (int)$_POST['tourn_id'] : null;
+      $newFromDate = substr(trim((string)$defFrom), 0, 10);
+      if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $newFromDate)) {
+          $newFromDate = '';
+      }
       $prevSuggestions = [];
       $citySuggestions = [];
       $citiesList = [];
@@ -343,9 +504,8 @@ h1{font-size:1.35rem;margin:0 0 8px}
       }
       try {
           if (defined('DB_HOST')) {
-              $mysqli = @new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
-              if ($mysqli && !$mysqli->connect_errno) {
-                  $mysqli->set_charset('utf8mb4');
+              $mysqli = db_ro();
+              if ($mysqli !== null) {
                   $citiesList = TournamentSuggest::allCities($mysqli);
                   if ($placeStr !== '') {
                       $citySuggestions = TournamentSuggest::suggestCity($mysqli, $placeStr, 12);
@@ -371,18 +531,29 @@ h1{font-size:1.35rem;margin:0 0 8px}
                       $preferStream = (int)$defaultStream;
                   }
                   if ($suggestTitle !== '') {
-                      $prevSuggestions = TournamentSuggest::suggestPrev($mysqli, $suggestTitle, 8, $preferStream);
+                      $prevSuggestions = TournamentSuggest::suggestPrev($mysqli, $suggestTitle, 8, $preferStream, $selfTid);
                   }
                   if ($defaultPrev === '' && $prevSuggestions) {
-                      $defaultPrev = (string)$prevSuggestions[0]['tourn_id'];
-                      if ($streamFromPrev === null && !empty($prevSuggestions[0]['stream'])) {
-                          $streamFromPrev = (int)$prevSuggestions[0]['stream'];
+                      // автоподстановка — только безопасного кандидата: без чужого next_id и не позже нового по дате
+                      $pick = null;
+                      foreach ($prevSuggestions as $cand) {
+                          if (!empty($cand['next_id']) && (int)$cand['next_id'] !== (int)$selfTid) continue;
+                          if ($newFromDate !== '' && !empty($cand['tour_date'])
+                              && substr((string)$cand['tour_date'], 0, 10) >= $newFromDate) continue;
+                          $pick = $cand;
+                          break;
                       }
-                      // подтянуть champ_t с лучшего кандидата
-                      if ($champFromPrev === null && ctype_digit($defaultPrev)) {
-                          $hdr2 = TournamentSuggest::fetchHeader($mysqli, (int)$defaultPrev);
-                          if ($hdr2 && isset($hdr2['champ_t']) && $hdr2['champ_t'] !== null && $hdr2['champ_t'] !== '') {
-                              $champFromPrev = (int)$hdr2['champ_t'];
+                      if ($pick !== null) {
+                          $defaultPrev = (string)$pick['tourn_id'];
+                          if ($streamFromPrev === null && !empty($pick['stream'])) {
+                              $streamFromPrev = (int)$pick['stream'];
+                          }
+                          // подтянуть champ_t с кандидата
+                          if ($champFromPrev === null && ctype_digit($defaultPrev)) {
+                              $hdr2 = TournamentSuggest::fetchHeader($mysqli, (int)$defaultPrev);
+                              if ($hdr2 && isset($hdr2['champ_t']) && $hdr2['champ_t'] !== null && $hdr2['champ_t'] !== '') {
+                                  $champFromPrev = (int)$hdr2['champ_t'];
+                              }
                           }
                       }
                   }
@@ -423,7 +594,7 @@ h1{font-size:1.35rem;margin:0 0 8px}
       }
     ?>
 
-    <form method="post">
+    <form method="post"><?= csrf_field() ?>
       <input type="hidden" name="tab" value="sql">
 
       <label>Название турнира</label>
@@ -445,8 +616,11 @@ h1{font-size:1.35rem;margin:0 0 8px}
       <p class="note">champ_t=<?= (int)$champFromPrev ?> взят с предыдущего турнира</p>
       <?php endif; ?>
 
-      <label>tourn_id (если указать — удалятся старые данные этого турнира и вставится заново)</label>
+      <label>tourn_id (перезапись только того же type; results не трогаем)</label>
       <input type="number" name="tourn_id" min="1" value="<?= h($_POST['tourn_id'] ?? '') ?>" placeholder="новый ID автоматически">
+      <?php if (!empty($GLOBALS['overwrite_preview'])): ?>
+      <p class="note" style="color:var(--warn)"><?= h($GLOBALS['overwrite_preview']) ?></p>
+      <?php endif; ?>
 
       <label>Город (city_id) — по месту проведения из отчёта</label>
       <?php if ($placeStr !== ''): ?>
@@ -512,6 +686,12 @@ h1{font-size:1.35rem;margin:0 0 8px}
           если указан: prev_id у нового + next_id у предыдущего; stream/champ_t можно взять с него
         <?php endif; ?>
       </p>
+      <?php if (!empty($GLOBALS['need_relink'])): ?>
+      <label style="display:flex;align-items:flex-start;gap:8px;margin-top:8px;color:#fcd34d;font-size:.9rem">
+        <input type="checkbox" name="confirm_prev" value="1" style="margin-top:3px">
+        Подтверждаю prev_id=<?= h((string)$defaultPrev) ?> несмотря на предупреждение выше
+      </label>
+      <?php endif; ?>
       <?php if (!empty($prevSuggestions)): ?>
       <p class="note"><b>Похожие турниры в базе</b> (клик подставит prev_id):</p>
       <ul style="font-size:.9rem;line-height:1.5;margin:0 0 12px 1.2em">
@@ -525,6 +705,12 @@ h1{font-size:1.35rem;margin:0 0 8px}
             <?php if (!empty($ps['tour_date'])): ?> (<?= h($ps['tour_date']) ?>)<?php endif; ?>
             <?php if ($ps['stream'] !== null): ?> · stream=<?= (int)$ps['stream'] ?><?php endif; ?>
           </a>
+          <?php if (!empty($ps['next_id']) && (int)$ps['next_id'] !== (int)$selfTid): ?>
+            <span style="color:var(--warn)">⚠ уже есть next_id=#<?= (int)$ps['next_id'] ?></span>
+          <?php endif; ?>
+          <?php if ($newFromDate !== '' && !empty($ps['tour_date']) && substr((string)$ps['tour_date'], 0, 10) >= $newFromDate): ?>
+            <span style="color:var(--warn)">⚠ не раньше нового по дате</span>
+          <?php endif; ?>
           <span style="color:var(--muted)"> — <?= h($ps['reason']) ?></span>
         </li>
         <?php endforeach; ?>
@@ -582,7 +768,7 @@ h1{font-size:1.35rem;margin:0 0 8px}
 
     <?php if ($sqlText): ?>
     <h2 style="margin-top:24px;font-size:1.05rem">SQL</h2>
-    <form method="post" id="form-run-sql" onsubmit="return confirm('Выполнить SQL в базе <?= h(defined('DB_NAME') ? DB_NAME : '') ?>?');">
+    <form method="post" id="form-run-sql" onsubmit="return confirm('Выполнить SQL в базе <?= h(defined('DB_NAME') ? DB_NAME : '') ?>?');"><?= csrf_field() ?><input type="hidden" name="run_nonce" value="<?= h((string)($_SESSION['run_nonce'] ?? '')) ?>">
       <input type="hidden" name="tab" value="sql">
       <input type="hidden" name="run_sql" value="1">
       <textarea id="sql-out" name="sql_script" style="min-height:320px;font-family:ui-monospace,monospace;font-size:.8rem;width:100%;padding:10px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:var(--text)"><?= h($sqlText) ?></textarea>
