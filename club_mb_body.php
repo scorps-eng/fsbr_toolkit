@@ -5,6 +5,7 @@ declare(strict_types=1);
  * Оставлена для совместимости; логика в ClubMb.php.
  */
 require_once __DIR__ . '/ClubMb.php';
+if (!defined('APP_BOOTSTRAPPED')) { http_response_code(403); exit; }
 if (file_exists(__DIR__ . '/ImportHistory.php')) {
     require_once __DIR__ . '/ImportHistory.php';
 }
@@ -25,10 +26,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ($_POST['tab'] ?? '') === '
         $error = 'Отметьте подтверждение перед выполнением SQL';
     } else {
         try {
-            $mysqli = cmb_db();
-            if (!$mysqli) {
-                throw new RuntimeException('Нет подключения к БД');
-            }
+            $mysqli = db_rw();
             if (!$mysqli->multi_query($sqlRun)) {
                 throw new RuntimeException($mysqli->error);
             }
@@ -189,7 +187,7 @@ textarea.sql{width:100%;min-height:180px;font-family:ui-monospace,monospace;font
   <h2 style="margin:0 0 8px;font-size:1.2rem">Клубные МБ (локальные турниры)</h2>
   <p class="note">Формат: «Отчет по МБ, набранным в локальных турнирах» — регион, период, колонки id / Игрок / МБ (две колонки игроков поддерживаются).</p>
   <?php if ($error): ?><div class="flash"><?= cmb_h($error) ?></div><?php endif; ?>
-  <form method="post" enctype="multipart/form-data">
+  <form method="post" enctype="multipart/form-data"><?= csrf_field() ?>
     <input type="hidden" name="tab" value="clubmb">
     <label>Файлы .xls / .xlsx (можно несколько)</label>
     <input type="file" name="files[]" accept=".xls,.xlsx,application/vnd.ms-excel" multiple required
@@ -289,7 +287,7 @@ textarea.sql{width:100%;min-height:180px;font-family:ui-monospace,monospace;font
   <p class="note">Выберите город в форме выше (выпадающий список) и снова нажмите «Проверить».</p>
   <?php elseif (!empty($rep['sql'])): ?>
   <label>SQL — tourn_header type=5 + tourn_ind (team_id=player_id). results не трогаем.</label>
-  <form method="post" onsubmit="return confirm('Выполнить SQL клубных МБ в базе?');">
+  <form method="post" onsubmit="return confirm('Выполнить SQL клубных МБ в базе?');"><?= csrf_field() ?>
     <input type="hidden" name="tab" value="clubmb">
     <input type="hidden" name="run_club_sql" value="1">
     <textarea class="sql" name="sql_script"><?= cmb_h($rep['sql']) ?></textarea>

@@ -29,9 +29,27 @@ class RatingCalculator
         'eu_junior' => [3, 2, 1],
         'w_bermuda' => [8, 6, 5, 4, 2, 2, 2, 2],
         'w_venice' => [7, 5, 4, 3, 1, 1, 1, 1],
-        'w_pair' => [8, 7, 6, 5, 4],  # 6-10:3, 11-20:2, 21-39:1 — упрощённо ниже
+        'w_pair' => [8, 7, 6, 5, 4],  // 6-10: 3, 11-20: 2, 21-39: 1 — задано в guaranteedPbForPlace()
         'w_other' => [4, 3, 2, 1],
         'w_junior' => [3, 2, 1],
+        // --- Приложение 1: добавлено по сверке со страницей ФСБР ---
+        'eu_champions_cup' => [5, 4, 3, 2, 1],
+        // ЧЕ открытый командный: 6-5-4-4, места 5-8: 2, 9-16: 1 (два 3-х места)
+        'eu_open_team' => [6, 5, 4, 4, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1],
+        // ЧЕ открытый командный (женщины): 5-4-3-3, места 5-8: 1
+        'eu_open_women_team' => [5, 4, 3, 3, 1, 1, 1, 1],
+        // ЧМ Розенблюм: 7-6-5-4, 5-8: 3, 9-16: 2, 17-32: 1
+        'w_rosenblum' => [7, 6, 5, 4, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2,
+                          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        // ЧМ Макконелл: 6-5-4-3, 5-8: 2, 9-16: 1
+        'w_mcconnell' => [6, 5, 4, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1],
+        'w_mixed_team' => [5, 4, 3, 2, 1],
+        'w_mixed_team_po' => [5, 4, 3, 2, 1, 1, 1, 1], // при наличии плей-офф: места 6-8 — 1
+        'w_mixed_pair' => [5, 4, 3, 2, 1],
+        // ЧМ женский парный: 6-5-4, места 4-6: 3, 7-10: 2, 11-18: 1
+        'w_women_pair' => [6, 5, 4, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1],
+        'olympiad_open' => [8, 7, 6, 5, 3, 3, 3, 3],
+        'olympiad_women' => [7, 6, 5, 4, 2, 2, 2, 2],
     ];
 
     public const GUARANTEED_PB_LABELS = [
@@ -46,15 +64,26 @@ class RatingCalculator
         'eu_team' => 'ЧЕ командный: 6-5-4-3-2-1',
         'eu_women_team' => 'ЧЕ женский командный: 5-4-3-2-1',
         'eu_pair' => 'ЧЕ парный: 6-5-4-3-2-1×5',
-        'eu_women_pair' => 'ЧЕ женский парный: 5-4-3-2-1×5',
-        'eu_mixed_team' => 'ЧЕ микст командный: 5-4-3-2-1×3',
+        'eu_women_pair' => 'ЧЕ женский парный: 5-4-3-2-1×6',
+        'eu_mixed_team' => 'ЧЕ микст командный: 5-4-3-2-1×4',
         'eu_mixed_pair' => 'ЧЕ микст парный: 5-4-3-2-1',
         'eu_junior' => 'ЧЕ юниорский: 3-2-1',
         'w_bermuda' => 'ЧМ Бермудский кубок: 8-6-5-4-2×4',
         'w_venice' => 'ЧМ Кубок Венеции: 7-5-4-3-1×4',
-        'w_pair' => 'ЧМ парный (макс): 8-7-6-5-4 + зоны',
+        'w_pair' => 'ЧМ парный (макс): 8-7-6-5-4, 6-10: 3, 11-20: 2, 21-39: 1',
         'w_other' => 'ЧМ прочие: 4-3-2-1',
         'w_junior' => 'ЧМ юниорский: 3-2-1',
+        'eu_champions_cup' => 'Кубок Европейских Чемпионов: 5-4-3-2-1',
+        'eu_open_team' => 'ЧЕ открытый командный: 6-5-4-4, 5-8: 2, 9-16: 1',
+        'eu_open_women_team' => 'ЧЕ открытый командный (женщины): 5-4-3-3, 5-8: 1',
+        'w_rosenblum' => 'ЧМ Кубок Розенблюма: 7-6-5-4, 5-8: 3, 9-16: 2, 17-32: 1',
+        'w_mcconnell' => 'ЧМ Кубок Макконелл: 6-5-4-3, 5-8: 2, 9-16: 1',
+        'w_mixed_team' => 'ЧМ микст командный (без плей-офф): 5-4-3-2-1',
+        'w_mixed_team_po' => 'ЧМ микст командный (с плей-офф): 5-4-3-2-1, 6-8: 1',
+        'w_mixed_pair' => 'ЧМ микст парный: 5-4-3-2-1',
+        'w_women_pair' => 'ЧМ женский парный: 6-5-4, 4-6: 3, 7-10: 2, 11-18: 1',
+        'olympiad_open' => 'Олимпиада, открытый: 8-7-6-5-3-3-3-3',
+        'olympiad_women' => 'Олимпиада, женский: 7-6-5-4-2-2-2-2',
     ];
 
     /** @var string */
@@ -113,17 +142,31 @@ class RatingCalculator
     }
 
 
-    public static function qFromRazr($razr): float
+    /**
+     * q из разряда (ошибка, если значение не из правил):
+     * - −10 ≤ razr ≤ 10 → razr/2
+     * - razr ≥ 90 → (razr − 100)/2
+     * - razr = 30 → 0.3 × cities.razr_coeff
+     */
+    public static function qFromRazr($razr, $razrCoeff = null): float
     {
         if ($razr === null || $razr === '') {
-            return 5.0;
+            throw new InvalidArgumentException('Нет разряда (razr) у игрока — нельзя вычислить q');
         }
         $r = (float)$razr;
-        // razr >= 95: (razr - 100) / 2; иначе razr / 2
-        if ($r >= 95) {
+        if ($r >= -10.0 && $r <= 10.0) {
+            return $r / 2.0;
+        }
+        if ($r >= 90.0) {
             return ($r - 100.0) / 2.0;
         }
-        return $r / 2.0;
+        if (abs($r - 30.0) < 1e-9) {
+            if ($razrCoeff === null || $razrCoeff === '') {
+                throw new InvalidArgumentException('razr=30, но у города нет razr_coeff — нельзя вычислить q');
+            }
+            return 0.3 * (float)$razrCoeff;
+        }
+        throw new InvalidArgumentException('Недопустимый разряд razr=' . $razr . ' (ожидается −10…10, ≥90 или 30)');
     }
 
     public static function q1(float $q): float
@@ -134,14 +177,18 @@ class RatingCalculator
         return 0.2 / (pow(1.6, $q));
     }
 
-    /** Добавить участника: rank, q (средний разряд), label, players */
-    public function addEntry(int $rank, float $q, string $label, array $players = []): void
+    /**
+     * Добавить участника: rank, q, label, players, result (VP/IMP из протокола).
+     * result хранится вместе с записью, чтобы не терять привязку после сортировки.
+     */
+    public function addEntry(int $rank, float $q, string $label, array $players = [], $result = null): void
     {
         $this->entries[] = [
             'rank' => $rank,
             'q' => $q,
             'label' => $label,
             'players' => $players,
+            'result' => ($result !== null && $result !== '' && is_numeric($result)) ? (0 + $result) : null,
         ];
     }
 
@@ -198,24 +245,23 @@ class RatingCalculator
 
         $lg = fn(float $x) => log10(max($x, 1e-12));
 
-        // RC
+        // RC / RCM
         $termN = 0.5 * $lg(max(1.0, $this->N0 / $Nq));
-        if ($this->status === 'express') {
+        $nonRating = ($this->status === 'non_rating');
+        if ($nonRating) {
+            // нерейтинговый: только МБ, RC/RCM/РО/ПБ = 0
+            $this->RC = 0.0;
+            $this->RCM = 0.0;
+        } elseif ($this->status === 'express') {
             $this->RC = ($this->kq + $termN - 0.5) / 2.0;
-        } else {
-            $this->RC = $this->kq + $lg($this->d / $dq) + $termN;
-        }
-        // статусы чемпионатов
-        if (in_array($this->status, ['russian', 'main_russian'], true)) {
-            $this->RC += 1.0;
-        } elseif ($this->status === 'regional') {
-            $this->RC += 0.5;
-        }
-
-        // RCM
-        if ($this->status === 'express') {
             $this->RCM = $this->RC;
         } else {
+            $this->RC = $this->kq + $lg($this->d / $dq) + $termN;
+            if (in_array($this->status, ['russian', 'main_russian'], true)) {
+                $this->RC += 1.0;
+            } elseif ($this->status === 'regional') {
+                $this->RC += 0.5;
+            }
             if ($dq <= $this->d && $this->d < 120) {
                 $this->RCM = $this->kq + $termN; // без lg(d/dq)
                 if (in_array($this->status, ['russian', 'main_russian'], true)) {
@@ -229,14 +275,18 @@ class RatingCalculator
         }
 
         // pR
-        if ($this->format === 'team') {
-            $pRraw = min($this->N, 20 * atan($this->N * ($this->RC + 1) / 100));
+        if ($nonRating) {
+            $this->pR = 0;
         } else {
-            $pRraw = min($this->N, 40 * atan($this->N * ($this->RC + 1) / 200));
-        }
-        $this->pR = (int)ceil($pRraw);
-        if ($this->pR < 2) {
-            $this->pR = 2; // избегаем lg(1)=0
+            if ($this->format === 'team') {
+                $pRraw = min($this->N, 20 * atan($this->N * ($this->RC + 1) / 100));
+            } else {
+                $pRraw = min($this->N, 40 * atan($this->N * ($this->RC + 1) / 200));
+            }
+            $this->pR = (int)ceil($pRraw);
+            if ($this->pR < 2) {
+                $this->pR = 2; // избегаем lg(1)=0
+            }
         }
 
         // kqn, kd для МБ
@@ -258,10 +308,11 @@ class RatingCalculator
         $this->R_reg = 1.1 * pow(100 * $this->kqn * $this->kd, 1.0 / $t);
 
         // PB1 по формуле
-        $this->PB1 = (int)self::roundHalfUp($this->RCM);
+        $this->PB1 = $nonRating ? 0 : (int)self::roundHalfUp($this->RCM);
 
-        // Гарантированные ПБ: если RC/RCM не дают нужный ПБ1 — поднять RC
-        $gPb1 = $this->guaranteedPbForPlace(1);
+        $rcBoosted = false;
+        // Гарантированные ПБ: если RC/RCM не дают нужный ПБ1 — RC := ПБ1 − 0.5
+        $gPb1 = $nonRating ? 0 : $this->guaranteedPbForPlace(1);
         if ($gPb1 > 0 && $this->PB1 < $gPb1) {
             // RC := ПБ1_гарант − 0.5 (п. 8.10)
             $this->RC = $gPb1 - 0.5;
@@ -278,7 +329,7 @@ class RatingCalculator
             // RCM для ПБ: не ниже гарантии
             $this->RCM = max($this->RCM, (float)$gPb1);
             $this->PB1 = $gPb1;
-            $this->debug['rc_boosted_for_guaranteed_pb'] = true;
+            $rcBoosted = true;
         }
 
 
@@ -317,27 +368,33 @@ class RatingCalculator
 
             // RO average
             $roSum = 0.0;
-            foreach ($places as $pl) {
-                if ($pl >= $this->pR) {
-                    $roSum += 0.0;
-                } else {
-                    $roSum += 50 * $this->RC * (1 - $lg($pl) / $lg($this->pR));
-                }
-            }
-            $ro = self::roundHalfUp($roSum / count($places));
-            if ($ro < 0) {
+            if ($nonRating || $this->pR < 2) {
                 $ro = 0;
+            } else {
+                foreach ($places as $pl) {
+                    if ($pl >= $this->pR) {
+                        $roSum += 0.0;
+                    } else {
+                        $roSum += 50 * $this->RC * (1 - $lg($pl) / $lg($this->pR));
+                    }
+                }
+                $ro = self::roundHalfUp($roSum / count($places));
+                if ($ro < 0) {
+                    $ro = 0;
+                }
             }
 
             // PB: по формуле; при ничьей — как за лучшее место группы ($p)
             $pb = 0;
-            if ($this->RCM >= 0.5) {
+            if (!$nonRating && $this->RCM >= 0.5) {
                 $pb = max(0, $this->PB1 - $p + 1);
             }
             // гарантированные ПБ — не меньше таблицы
-            $gPb = $this->guaranteedPbForPlace((int)$p);
-            if ($gPb > $pb) {
-                $pb = $gPb;
+            if (!$nonRating) {
+                $gPb = $this->guaranteedPbForPlace((int)$p);
+                if ($gPb > $pb) {
+                    $pb = $gPb;
+                }
             }
 
 
@@ -362,6 +419,7 @@ class RatingCalculator
                 'RO' => (int)$ro,
                 'PB' => (int)$pb,
                 'MB' => $mb,
+                'result' => $e['result'] ?? null,
                 'players' => $e['players'],
             ];
         }
@@ -387,6 +445,7 @@ class RatingCalculator
             'status' => $this->status,
             'guaranteed' => $this->guaranteedKey,
             'guaranteed_pb1' => $this->guaranteedPbForPlace(1),
+            'rc_boosted_for_guaranteed_pb' => $rcBoosted,
         ];
 
         return [
@@ -493,6 +552,7 @@ class RatingCalculator
                 'MB' => $mb,
                 'RO' => 0,
                 'PB' => 0,
+                'result' => $e['result'] ?? null,
                 'players' => $e['players'],
             ];
         }

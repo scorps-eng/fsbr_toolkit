@@ -233,7 +233,7 @@ class TournamentSuggest
      * @param int|null $preferStream если задан — выше rank у того же stream
      * @return list<array{tourn_id:int,name:string,tour_date:?string,stream:?int,score:float,reason:string}>
      */
-    public static function suggestPrev(mysqli $db, string $title, int $limit = 8, ?int $preferStream = null): array
+    public static function suggestPrev(mysqli $db, string $title, int $limit = 8, ?int $preferStream = null, ?int $excludeId = null): array
     {
         $title = trim($title);
         if ($title === '') {
@@ -261,7 +261,7 @@ class TournamentSuggest
             return [];
         }
         $likeSql = '(' . implode(' OR ', $likeParts) . ')';
-        $sql = "SELECT tourn_id, name, tour_date, stream
+        $sql = "SELECT tourn_id, name, tour_date, stream, next_id
                 FROM tourn_header
                 WHERE (type IS NULL OR type IN (1,2,3,5,6))
                   AND (parent IS NULL OR parent = 0)
@@ -275,6 +275,9 @@ class TournamentSuggest
 
         $cands = [];
         while ($row = $res->fetch_assoc()) {
+            if ($excludeId !== null && (int)$row['tourn_id'] === $excludeId) {
+                continue; // сам редактируемый турнир не может быть своим prev
+            }
             $name = (string)($row['name'] ?? '');
             $nid = self::normalizeName($name);
             $score = 0.0;
@@ -312,6 +315,7 @@ class TournamentSuggest
                 'name' => $name,
                 'tour_date' => $row['tour_date'] ?? null,
                 'stream' => $rowStream,
+                'next_id' => isset($row['next_id']) && $row['next_id'] !== '' ? (int)$row['next_id'] : null,
                 'score' => $score,
                 'reason' => implode('; ', $reasons),
             ];
@@ -435,21 +439,53 @@ class TournamentSuggest
      * Угадать статус турнира для формул RC.
      * @return array{status:string,reason:string}
      */
-    public static function suggestStatus(string $title, string $fallback = 'rating'): array
+    /**
+     * Статус по названию и фактической длине d.
+     * 16–47: нерейтинговый; 48–65 (пары)/87 (команды): экспресс;
+     * длиннее: рейтинговый (или ЧР/РЧ по названию).
+     * @return array{status:string,reason:string}
+     */
+    public static function suggestStatus(string $title, string $fallback = 'rating', ?float $d = null, string $format = 'pair'): array
     {
         $t = self::lower($title);
-        if (preg_match('/основн.*(чр|чемпионат\s+росси)|чемпионат\s+росси.*основн/ui', $t)) {
-            return ['status' => 'main_russian', 'reason' => 'основной ЧР по названию'];
+        // сначала спец. статусы по названию (если длина позволяет «рейтинговую» зону)
+        $named = null;
+        if (preg_match('/основн\w*\s+чемпионат\s+росси/ui', $t) || preg_match('/чемпионат\s+росси\w*\s+основ/ui', $t)) {
+            $named = ['status' => 'main_russian', 'reason' => 'основной ЧР по названию'];
+        } elseif (preg_match('/чемпионат\s+росси/ui', $t) || preg_match('/\bчр\b/ui', $t)) {
+            $named = ['status' => 'russian', 'reason' => 'ЧР по названию'];
+        } elseif (preg_match('/региональн/ui', $t) || preg_match('/чемпионат\s+(области|края|республик)/ui', $t)) {
+            $named = ['status' => 'regional', 'reason' => 'региональный по названию'];
+        } elseif (preg_match('/экспресс/ui', $t)) {
+            $named = ['status' => 'express', 'reason' => 'экспресс по названию'];
         }
-        if (preg_match('/чемпионат\s+росси|\bчр\b/ui', $t)) {
-            return ['status' => 'russian', 'reason' => 'ЧР по названию'];
+
+        $dMaxExpress = ($format === 'team') ? 87.0 : 65.0;
+        if ($d !== null && $d > 0) {
+            if ($d >= 16 && $d <= 47) {
+                return ['status' => 'non_rating', 'reason' => "фактическая длина {$d} (16–47) → только МБ"];
+            }
+            if ($d >= 48 && $d <= $dMaxExpress) {
+                if ($named && $named['status'] === 'express') {
+                    return $named;
+                }
+                return ['status' => 'express', 'reason' => "фактическая длина {$d} (48–" . (int)$dMaxExpress . ") → экспресс"];
+            }
+            // d > dMaxExpress (или d < 16): рейтинговая зона
+            if ($named && in_array($named['status'], ['main_russian', 'russian', 'regional', 'rating'], true)) {
+                return $named;
+            }
+            if ($named && $named['status'] === 'express') {
+                // название «экспресс», но длина уже рейтинговая
+                return ['status' => 'rating', 'reason' => "длина {$d} выше экспресса → рейтинговый"];
+            }
+            return ['status' => 'rating', 'reason' => "фактическая длина {$d} → рейтинговый и выше"];
         }
-        if (preg_match('/региональн|\bрч\b|областн|краев/ui', $t)) {
-            return ['status' => 'regional', 'reason' => 'региональный по названию'];
-        }
-        if (preg_match('/экспресс|express/ui', $t)) {
-            return ['status' => 'express', 'reason' => 'экспресс по названию'];
+
+        if ($named) {
+            return $named;
         }
         return ['status' => $fallback, 'reason' => 'по умолчанию'];
     }
+
 }

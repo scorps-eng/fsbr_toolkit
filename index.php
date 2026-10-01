@@ -3,19 +3,35 @@ declare(strict_types=1);
 /**
  * FSBR Toolkit: турниры и клубные МБ — проверка → расчёт → SQL
  */
-session_start();
+require_once __DIR__ . '/bootstrap.php';
+header('X-Frame-Options: DENY');
+header('X-Content-Type-Options: nosniff');
+header('Referrer-Policy: same-origin');
+header('Cache-Control: no-store');
+app_session_start();
+auth_require();   // без входа дальше не идём
+csrf_enforce();   // все POST — только с верным CSRF-токеном
 
 $tab = $_GET['tab'] ?? $_POST['tab'] ?? 'check';
 if (!in_array($tab, ['check', 'rating', 'sql', 'history'], true)) {
     $tab = 'check';
 }
 
-// Передача JSON с шага проверки на шаг расчёта
+// JSON с проверки хранится в сессии (не тащим огромный JSON в hidden-поле формы)
 if ($tab === 'rating' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !empty($_POST['from_check_json'])) {
     $_SESSION['report_json'] = $_POST['from_check_json'];
 }
-if ($tab === 'rating' && empty($_POST['json_text']) && empty($_FILES['json']['tmp_name']) && !empty($_SESSION['report_json'])) {
-    // подставим в rating через глобаль
+if ($tab === 'rating' && !empty($_SESSION['report_json'])) {
+    // ручная загрузка файла/textarea имеет приоритет при POST расчёта
+    if (empty($_FILES['json']['tmp_name']) && (empty($_POST['json_text']) || !empty($_POST['from_session']))) {
+        $GLOBALS['prefill_json'] = $_SESSION['report_json'];
+    } elseif (empty($_FILES['json']['tmp_name']) && empty($_POST['json_text'])) {
+        $GLOBALS['prefill_json'] = $_SESSION['report_json'];
+    }
+}
+// при открытии вкладки расчёта всегда подставляем сессию, если нет свежей ручной загрузки
+if ($tab === 'rating' && empty($GLOBALS['prefill_json']) && !empty($_SESSION['report_json'])
+    && empty($_FILES['json']['tmp_name']) && empty($_POST['json_text'])) {
     $GLOBALS['prefill_json'] = $_SESSION['report_json'];
 }
 
@@ -58,6 +74,7 @@ body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);mar
 </head>
 <body>
 <div class="header">
+  <form method="post" style="float:right;margin:0"><?= csrf_field() ?><input type="hidden" name="do_logout" value="1"><button type="submit" style="background:none;border:1px solid #2a3548;color:var(--muted);border-radius:6px;padding:4px 10px;cursor:pointer">Выйти</button></form>
   <h1>FSBR Toolkit</h1>
   <p class="sub">Турнирные протоколы и клубные МБ: проверка → расчёт РО/ПБ/МБ → SQL · история загрузок</p>
   <?php toolkit_nav($tab); ?>

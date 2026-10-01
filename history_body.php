@@ -1,11 +1,7 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/ImportHistory.php';
-if (!function_exists('h')) {
-    function h(?string $s): string {
-        return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-    }
-}
 $log = ImportHistory::all(300);
 ?>
 <style>
@@ -19,7 +15,7 @@ th{color:var(--muted);font-weight:600}
 </style>
 <div class="card">
   <h2 style="margin:0 0 8px;font-size:1.15rem">История загрузок</h2>
-  <p class="note">Записи о выполнении SQL: обычные турниры и клубные МБ. Хранится локально в <code>data/import_log.json</code>.</p>
+  <p class="note">Записи о выполнении SQL: обычные турниры и клубные МБ. Хранится локально в <code>data/import_log.json.php</code>.</p>
   <?php if (!$log): ?>
   <p class="note">Пока пусто — выполните SQL на вкладке «SQL» или «Клубные МБ».</p>
   <?php else: ?>

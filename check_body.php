@@ -9,157 +9,31 @@
  */
 declare(strict_types=1);
 
-$CONFIG = require __DIR__ . '/config.php';
+require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/names.php';
 require_once __DIR__ . '/XlsReader.php';
 require_once __DIR__ . '/ClubMb.php';
-if (!defined('DB_HOST')) {
-    define('DB_HOST', $CONFIG['db_host']);
-    define('DB_USER', $CONFIG['db_user']);
-    define('DB_PASS', $CONFIG['db_pass']);
-    define('DB_NAME', $CONFIG['db_name']);
-}
-
-function h(?string $s): string {
-    return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-}
-
-function normalize(string $s): string {
-    $s = mb_strtolower(trim($s), 'UTF-8');
-    $s = str_replace('ё', 'е', $s);
-    $s = preg_replace('/[^\p{L}\p{N}\s.\-]/u', ' ', $s) ?? $s;
-    $s = preg_replace('/\s+/u', ' ', $s) ?? $s;
-    return trim($s);
-}
-
-function tokenize_name(string $name): array
-{
-    $name = trim(rtrim(trim($name), '*'));
-    if ($name === '') return [];
-    // "И.О." / "И. О." / "А.С." → отдельные инициалы
-    $name = preg_replace('/(\p{L})\s*\.\s*(\p{L})\s*\./u', '$1. $2.', $name);
-    $name = preg_replace('/(\p{L})\s*\./u', '$1. ', $name);
-    $parts = preg_split('/\s+/u', trim($name)) ?: [];
-    $tokens = [];
-    foreach ($parts as $p) {
-        $p = trim($p, " \t-,");
-        if ($p === '') continue;
-        $tokens[] = $p;
-    }
-    return $tokens;
-}
-
-/** Нормализация токена: нижний регистр, ё→е, без точек на конце инициала */
-function norm_token(string $s): string
-{
-    $s = normalize($s);
-    $s = rtrim($s, '.');
-    return $s;
-}
-
-/**
- * Гибкое сравнение имени из отчёта с ФИО в базе.
- * Допустимы любые порядок и регистр, если есть фамилия и имя (или инициал).
- *
- * Примеры:
- *   Фамилия Имя | Фамилия И.О. | Фамилия И. | Имя ФАМИЛИЯ
- *   И.О. Фамилия | Имя Отчество Фамилия | ФАМИЛИЯ Имя Отчество
- *   фамилия имя | ИМЯ фамилия
- */
-function names_match(string $report, ?string $dbFamily, ?string $dbGiven, ?string $dbPatr): bool
-{
-    $tokens = tokenize_name($report);
-    if (!$tokens) return false;
-
-    $dbF = norm_token((string)($dbFamily ?? ''));
-    $dbG = norm_token((string)($dbGiven ?? ''));
-    $dbP = norm_token((string)($dbPatr ?? ''));
-    if ($dbF === '') return false;
-
-    $familyOk = false;
-    $givenOk = ($dbG === ''); // если в базе нет имени — не требуем
-    $used = []; // индексы токенов, уже сопоставленных с фамилией
-
-    $isInitial = function (string $t): bool {
-        $t = norm_token($t);
-        return $t !== '' && mb_strlen($t, 'UTF-8') === 1;
-    };
-
-    $tokenMatchesGiven = function (string $tok) use ($dbG, $isInitial): bool {
-        if ($dbG === '') return false;
-        $t = norm_token($tok);
-        if ($t === '') return false;
-        if ($isInitial($tok)) {
-            return mb_substr($dbG, 0, 1, 'UTF-8') === $t;
-        }
-        return $t === $dbG
-            || str_starts_with($dbG, $t)
-            || str_starts_with($t, $dbG);
-    };
-
-    $tokenMatchesFamily = function (string $tok) use ($dbF): bool {
-        $t = norm_token($tok);
-        if ($t === '' || mb_strlen($t, 'UTF-8') <= 1) return false; // инициал ≠ фамилия
-        return $t === $dbF
-            || str_replace('-', '', $t) === str_replace('-', '', $dbF);
-    };
-
-    // 1) Найти фамилию среди токенов
-    foreach ($tokens as $i => $tok) {
-        if ($tokenMatchesFamily($tok)) {
-            $familyOk = true;
-            $used[$i] = true;
-            break;
-        }
-    }
-    if (!$familyOk) return false;
-
-    // Только фамилия в отчёте — достаточно совпадения фамилии
-    if (count($tokens) === 1 && $familyOk) {
-        return true;
-    }
-
-    // 2) Имя / инициал среди оставшихся токенов
-    if ($dbG !== '') {
-        foreach ($tokens as $i => $tok) {
-            if (!empty($used[$i])) continue;
-            if ($tokenMatchesGiven($tok)) {
-                $givenOk = true;
-                $used[$i] = true;
-                break;
-            }
-        }
-        // "И.О." могло остаться одним токеном до split — перепроверим склеенные инициалы
-        if (!$givenOk) {
-            $joined = norm_token(implode('', $tokens));
-            // fallback: любой инициал в строке
-            $reportNorm = normalize($report);
-            if (preg_match('/(?:^|[\s.])' . preg_quote(mb_substr($dbG, 0, 1, 'UTF-8'), '/') . '(?:\.|$|[\s])/u', $reportNorm)) {
-                $givenOk = true;
-            }
-        }
-    }
-
-    return $familyOk && $givenOk;
-}
 
 
 function db(): mysqli {
-    $m = @new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
-    if ($m->connect_error) {
-        throw new RuntimeException('Ошибка БД: ' . $m->connect_error);
+    $m = db_ro();
+    if ($m === null) {
+        throw new RuntimeException('Нет подключения к базе данных (проверьте config.php и доступность сервера БД)');
     }
-    $m->set_charset('utf8mb4');
     return $m;
 }
 
 function get_player(mysqli $db, int $id): ?array {
     $st = $db->prepare(
         'SELECT p.player_id, p.firstname AS family, p.lastname AS given_name, p.surname AS patronymic,
-                p.razr, p.state, p.city_id, c.city_name
+                p.razr, p.state, p.city_id, c.city_name, c.razr_coeff
          FROM players p
          LEFT JOIN cities c ON c.city_id = p.city_id
          WHERE p.player_id = ?'
     );
+    if (!$st) {
+        throw new RuntimeException('Ошибка запроса к таблице players (проверьте права учётки БД)');
+    }
     $st->bind_param('i', $id);
     $st->execute();
     $res = $st->get_result()->fetch_assoc();
@@ -167,16 +41,34 @@ function get_player(mysqli $db, int $id): ?array {
     return $res ?: null;
 }
 
-function q_from_razr($razr): ?float
+/**
+ * @return array{0:?float,1:?string} [q, error message]
+ */
+function q_from_razr_checked($razr, $razrCoeff = null): array
 {
     if ($razr === null || $razr === '') {
-        return 5.0;
+        return [null, 'нет разряда (razr)'];
     }
     $r = (float)$razr;
-    if ($r >= 95) {
-        return ($r - 100.0) / 2.0;
+    if ($r >= -10.0 && $r <= 10.0) {
+        return [$r / 2.0, null];
     }
-    return $r / 2.0;
+    if ($r >= 90.0) {
+        return [($r - 100.0) / 2.0, null];
+    }
+    if (abs($r - 30.0) < 1e-9) {
+        if ($razrCoeff === null || $razrCoeff === '') {
+            return [null, 'razr=30, у города нет razr_coeff'];
+        }
+        return [0.3 * (float)$razrCoeff, null];
+    }
+    return [null, 'недопустимый razr=' . $razr . ' (нужно −10…10, ≥90 или 30)'];
+}
+
+function q_from_razr($razr, $razrCoeff = null): ?float
+{
+    [$q, $err] = q_from_razr_checked($razr, $razrCoeff);
+    return $q;
 }
 
 function state_label($state): string
@@ -212,6 +104,9 @@ function search_players_by_name(mysqli $db, string $reportName, int $limit = 8):
     $famLike = norm_token($family) . '%';
     // firstname в БД = фамилия
     $st = $db->prepare('SELECT player_id, firstname AS family, lastname AS given_name, surname AS patronymic, razr FROM players WHERE firstname LIKE ? ORDER BY player_id LIMIT ?');
+    if (!$st) {
+        return []; // подсказки необязательны
+    }
     $lim = $limit * 3;
     $st->bind_param('si', $famLike, $lim);
     $st->execute();
@@ -1116,7 +1011,13 @@ function validate(array $players, array $judges): array
             $dbp['family'] ?? '', $dbp['given_name'] ?? '', $dbp['patronymic'] ?? '',
         ])));
         $entry['razr'] = isset($dbp['razr']) ? (is_numeric($dbp['razr']) ? (0 + $dbp['razr']) : $dbp['razr']) : null;
-        $entry['q'] = q_from_razr($entry['razr']);
+        $entry['razr_coeff'] = isset($dbp['razr_coeff']) && $dbp['razr_coeff'] !== null && $dbp['razr_coeff'] !== ''
+            ? (0 + $dbp['razr_coeff']) : null;
+        [$entry['q'], $qErr] = q_from_razr_checked($entry['razr'], $entry['razr_coeff']);
+        if ($qErr !== null) {
+            $entry['q_error'] = $qErr;
+            $entry['status_warn'] = trim(($entry['status_warn'] ?? '') . ' ' . $qErr);
+        }
         $entry['state'] = isset($dbp['state']) && $dbp['state'] !== null && $dbp['state'] !== '' ? (int)$dbp['state'] : null;
         $entry['city'] = $dbp['city_name'] ?? null;
         $entry['city_id'] = isset($dbp['city_id']) ? (0 + $dbp['city_id']) : null;
@@ -1310,13 +1211,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $p1key = $pair['id1'] !== null ? 'id:'.$pair['id1'] : 'name:'.normalize($pair['name1'] ?? '');
             $i1 = $playerInfo[$p1key] ?? null;
             $mk = function($name, $id, $info) {
+                $info = is_array($info) ? $info : [];
                 return [
                     'name' => $name,
                     'player_id' => $id,
                     'status' => $info['status'] ?? null,
                     'db_fio' => $info['db_fio'] ?? null,
                     'razr' => $info['razr'] ?? null,
-                    'q' => $info['q'] ?? (isset($info['razr']) ? q_from_razr($info['razr']) : null),
+                    'razr_coeff' => $info['razr_coeff'] ?? null,
+                    'city_id' => $info['city_id'] ?? null,
+                    'q' => $info['q'] ?? (isset($info['razr']) ? q_from_razr($info['razr'], $info['razr_coeff'] ?? null) : null),
                 ];
             };
             $out = [
@@ -1403,6 +1307,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'status' => $info['status'] ?? null,
                         'db_fio' => $info['db_fio'] ?? null,
                         'razr' => $info['razr'] ?? null,
+                        'razr_coeff' => $info['razr_coeff'] ?? null,
+                        'city_id' => $info['city_id'] ?? null,
+                        'q' => $info['q'] ?? (isset($info['razr']) ? q_from_razr($info['razr'], $info['razr_coeff'] ?? null) : null),
                     ];
                 }
                 $entry = [
@@ -1439,6 +1346,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'status' => $info['status'] ?? null,
                         'db_fio' => $info['db_fio'] ?? null,
                         'razr' => $info['razr'] ?? null,
+                        'razr_coeff' => $info['razr_coeff'] ?? null,
+                        'city_id' => $info['city_id'] ?? null,
+                        'q' => $info['q'] ?? (isset($info['razr']) ? q_from_razr($info['razr'], $info['razr_coeff'] ?? null) : null),
                     ];
                 }
                 if (!$playersOut) continue;
@@ -1954,7 +1864,7 @@ h1{font-size:1.4rem;margin:0 0 8px}
   <h1>Проверка отчёта</h1>
   <p class="sub">Сверка ID и имён с базой FSBR. Подходят <b>турнирные протоколы</b> (пары / команды / индивидуал) и <b>клубные МБ</b> («Отчет по МБ…»). Файлы <b>.xls</b> и <b>.xlsx</b>.</p>
   <?php if ($error): ?><div class="flash"><?= h($error) ?></div><?php endif; ?>
-  <form method="post" enctype="multipart/form-data">
+  <form method="post" enctype="multipart/form-data"><?= csrf_field() ?>
     <label class="drop" id="drop">
       <div id="label">Выберите файл .xls или .xlsx</div>
       <input type="file" name="file" accept=".xlsx,.xls" id="file" required>
@@ -2372,7 +2282,7 @@ endif; ?>
   <?php endif; ?>
   <?php if (!empty($jsonReport['city_error'])): ?>
   <div class="flash"><?= h($jsonReport['city_error']) ?></div>
-  <form method="post" enctype="multipart/form-data">
+  <form method="post" enctype="multipart/form-data"><?= csrf_field() ?>
     <input type="hidden" name="tab" value="check">
     <label>Город</label>
     <select name="city_id" style="width:100%;max-width:400px;padding:8px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:var(--text)">
@@ -2392,7 +2302,7 @@ endif; ?>
     <button class="btn" type="submit">Проверить снова</button>
   </form>
   <?php elseif (!empty($jsonReport['sql'])): ?>
-  <form method="post" action="?tab=sql">
+  <form method="post" action="?tab=sql"><?= csrf_field() ?>
     <input type="hidden" name="tab" value="sql">
     <input type="hidden" name="from_club_mb" value="1">
     <button class="btn btn-next" type="submit">Перейти к SQL →</button>
@@ -2400,12 +2310,8 @@ endif; ?>
   <?php endif; ?>
   <?php else: ?>
   <h2>Дальше: расчёт рейтинга</h2>
-  <p class="sub">JSON проверки можно передать на шаг расчёта РО / ПБ / МБ.</p>
-  <form method="post" action="?tab=rating">
-    <input type="hidden" name="tab" value="rating">
-    <input type="hidden" name="from_check_json" value="<?= h(json_encode($jsonReport, JSON_UNESCAPED_UNICODE)) ?>">
-    <button class="btn btn-next" type="submit">Перейти к расчёту →</button>
-  </form>
+  <p class="sub">Отчёт уже сохранён в сессии — можно перейти к расчёту РО / ПБ / МБ.</p>
+  <p><a class="btn btn-next" href="?tab=rating" style="display:inline-block;text-decoration:none;text-align:center">Перейти к расчёту →</a></p>
   <?php endif; ?>
 </section>
 <?php endif; ?>
