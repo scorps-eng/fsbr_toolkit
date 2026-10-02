@@ -181,14 +181,17 @@ if ($A) {
         }
     } elseif ($A['type'] === 'a') {
         $fam = $db->real_escape_string((string)$A['firstname']);
-        $ml = $db->real_escape_string((string)$A['mail']);
-        $cond = "firstname = '{$fam}'" . ($A['mail'] ? " OR LOWER(mail) = LOWER('{$ml}')" : '');
+        $mailCond = '';
+        foreach (anketa_split_mails((string)$A['mail']) as $m1) {
+            $mailCond .= " OR LOWER(mail) LIKE '%" . $db->real_escape_string(addcslashes($m1, '%_')) . "%'";
+        }
+        $cond = "firstname = '{$fam}'" . $mailCond;
         if ($birthCol && $A['birthdate']) {
             $cond .= " OR {$birthCol} = '" . $db->real_escape_string((string)$A['birthdate']) . "'";
         }
         $pls = ab_rows($db, 'SELECT player_id, firstname, lastname, surname, mail'
             . ($birthCol ? ", {$birthCol} AS birthdate" : '') . " FROM players WHERE {$cond} LIMIT 60");
-        $cond2 = "firstname = '{$fam}'" . ($A['mail'] ? " OR LOWER(mail) = LOWER('{$ml}')" : '')
+        $cond2 = "firstname = '{$fam}'" . $mailCond
             . ($A['birthdate'] ? " OR birthdate = '" . $db->real_escape_string((string)$A['birthdate']) . "'" : '');
         $pend = ab_rows($db, "SELECT id, result_player_id, firstname, lastname, surname, birthdate, mail, status
             FROM aux_questionaries WHERE id <> {$aid} AND (status IS NULL OR status = 'accepted') AND type = 'a' AND ({$cond2}) LIMIT 60");
@@ -232,7 +235,7 @@ if ($post && $A && $act === 'build') {
             }
             foreach ($plCols as $cn => $ci) {
                 if (!$ci['null'] && $ci['default'] === null && stripos($ci['extra'], 'auto_increment') === false
-                    && !in_array($cn, ['player_id', 'firstname', 'lastname', 'surname', 'sex', 'phone', 'mail', 'club_id', 'city_id', (string)$birthCol], true)) {
+                    && !in_array($cn, ['player_id', 'firstname', 'lastname', 'surname', 'sex', 'club_id', 'city_id', 'state', 'razr', 'lifetime', 'lastupdated', (string)$birthCol], true)) {
                     $aux_warn[] = "Колонка players.{$cn} обязательна и не имеет значения по умолчанию — вставка нового игрока может не пройти (откат безопасен).";
                 }
             }

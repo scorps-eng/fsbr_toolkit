@@ -35,6 +35,19 @@ function anketa_empty(string $field, $v): bool
     return false;
 }
 
+/** Список e-mail из строки (через запятую/точку с запятой/пробел): нижний регистр, без дублей, порядок сохраняется. */
+function anketa_split_mails(string $s): array
+{
+    $out = [];
+    foreach (preg_split('/[,;\s]+/', trim($s)) ?: [] as $m) {
+        $m = mb_strtolower(trim($m));
+        if ($m !== '' && !in_array($m, $out, true)) {
+            $out[] = $m;
+        }
+    }
+    return $out;
+}
+
 /** Нормализация значения для сравнения/вывода. */
 function anketa_norm(string $field, $v): string
 {
@@ -43,7 +56,9 @@ function anketa_norm(string $field, $v): string
     }
     $s = trim((string)$v);
     if ($field === 'mail') {
-        return mb_strtolower($s);
+        $l = anketa_split_mails($s);
+        sort($l);                       // порядок адресов не важен
+        return implode(',', $l);
     }
     if ($field === 'phone') {
         // список номеров через запятую → только цифры у каждого
@@ -103,7 +118,7 @@ function anketa_verify_compare(array $prev, array $given): string
     $pm = anketa_norm('mail', $prev['mail'] ?? '');
     if ($pm !== '') {
         $avail++;
-        if (anketa_norm('mail', $given['mail'] ?? '') === $pm) {
+        if (array_intersect(anketa_split_mails((string)($given['mail'] ?? '')), explode(',', $pm))) {
             $match++;
         }
     }
@@ -172,7 +187,7 @@ function anketa_candidates(array $a, array $players, array $pending): array
                 $s += 1;
             }
         }
-        if ($mail !== '' && anketa_norm('mail', $r['mail'] ?? '') === $mail) {
+        if ($mail !== '' && array_intersect(explode(',', $mail), explode(',', anketa_norm('mail', $r['mail'] ?? '')))) {
             $s += 4;
         }
         if ($bd !== '' && anketa_norm('birthdate', $r['birthdate'] ?? '') === $bd) {

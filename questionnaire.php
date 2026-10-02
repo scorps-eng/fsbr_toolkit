@@ -53,7 +53,7 @@ if (isset($_GET['ajax']) && in_array($_GET['ajax'], ['send_code', 'check_code'],
         $reply(false, 'Укажите корректный e-mail');
     }
     if ($_GET['ajax'] === 'send_code') {
-        $last = (int)($_SESSION['mail_code']['sent'] ?? 0);
+        $last = (int)($_SESSION['mail_sent'][$mailIn] ?? 0);
         if (time() - $last < 60) {
             $reply(false, 'Повторная отправка возможна через минуту');
         }
@@ -61,18 +61,17 @@ if (isset($_GET['ajax']) && in_array($_GET['ajax'], ['send_code', 'check_code'],
             $reply(false, 'Слишком много запросов. Попробуйте позже');
         }
         $code = (string)random_int(100000, 999999);
+        $_SESSION['mail_sent'][$mailIn] = time();
         $_SESSION['mail_code'] = [
             'mail' => $mailIn,
             'hash' => hash_hmac('sha256', $code, session_id()),
             'exp' => time() + 900,
             'tries' => 0,
-            'sent' => time(),
         ];
-        unset($_SESSION['mail_verified']);
         $okSend = app_send_mail($mailIn, 'Код подтверждения анкеты ФСБР',
             "Ваш код подтверждения e-mail: {$code}\nКод действует 15 минут.\nЕсли вы не заполняли анкету ФСБР — просто проигнорируйте письмо.\n");
         if (!$okSend) {
-            $_SESSION['mail_code']['sent'] = 0; // неудачная отправка не должна включать паузу
+            $_SESSION['mail_sent'][$mailIn] = 0; // неудачная отправка не должна включать паузу
         }
         $reply($okSend, $okSend ? 'Код отправлен на ' . $mailIn : 'Не удалось отправить письмо. Сообщите организаторам');
     }
@@ -87,7 +86,7 @@ if (isset($_GET['ajax']) && in_array($_GET['ajax'], ['send_code', 'check_code'],
     $_SESSION['mail_code']['tries'] = (int)$mc['tries'] + 1;
     $given = preg_replace('/\D+/', '', (string)($_POST['code'] ?? ''));
     if (hash_equals((string)$mc['hash'], hash_hmac('sha256', (string)$given, session_id()))) {
-        $_SESSION['mail_verified'] = $mailIn;
+        $_SESSION['mail_verified'] = array_values(array_unique(array_merge((array)($_SESSION['mail_verified'] ?? []), [$mailIn])));
         unset($_SESSION['mail_code']);
         $reply(true, 'E-mail подтверждён');
     }
@@ -249,17 +248,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_anketa'])) {
         }
 
         // e-mail должен быть подтверждён кодом (обязательно для нового игрока, для обновления — если указан)
-        $mailNorm = mb_strtolower($mail);
-        if ($mail === '') {
+        $mailList = anketa_split_mails($mail);
+        if (!$mailList) {
             throw new RuntimeException('Укажите e-mail и подтвердите его кодом из письма');
         }
-        if ($mail !== '') {
-            if (!mail_address_ok($mail)) {
-                throw new RuntimeException('Некорректный e-mail');
+        foreach ($mailList as $m1) {
+            if (!mail_address_ok($m1)) {
+                throw new RuntimeException('Некорректный e-mail: ' . $m1);
             }
-            if (($_SESSION['mail_verified'] ?? '') !== $mailNorm) {
-                throw new RuntimeException('Подтвердите e-mail кодом из письма');
-            }
+        }
+        $mail = implode(', ', $mailList);
+        if (mb_strlen($mail) > 80) {
+            throw new RuntimeException('Слишком длинный список e-mail (не более 80 символов)');
+        }
+        $notVerified = array_diff($mailList, (array)($_SESSION['mail_verified'] ?? []));
+        if ($notVerified) {
+            throw new RuntimeException('Подтвердите кодом из письма каждый адрес. Не подтверждено: ' . implode(', ', $notVerified));
         }
 
         // обновление: сверка введённых «для проверки» данных с предыдущей анкетой (результат пользователю не показываем)
@@ -297,7 +301,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_anketa'])) {
                 'mail' => trim((string)($_POST['v_mail'] ?? '')),
             ]);
         }
-        $emailVerified = ($mail !== '' && ($_SESSION['mail_verified'] ?? '') === $mailNorm) ? 1 : 0;
+        $emailVerified = 1; // все адреса подтверждены (проверено выше)
 
         // новые колонки есть не во всех базах — пишем в них только если они созданы (db_setup.sql, п. 4)
         $hasExtra = false;
@@ -522,7 +526,7 @@ if ($mysqli) {
         <button type="button" id="btn-check-code" class="btn" style="margin-top:0;width:auto;padding:8px 16px;display:inline-block">Подтвердить</button>
       </span>
       <p class="note" id="mail-status"></p>
-    <p class="note">E-mail нужно подтвердить кодом из письма. При обновлении можно указать прежний или новый адрес.</p>
+    <p class="note">Можно указать несколько адресов через запятую. Каждый подтверждается своим кодом: нажмите «Отправить код», введите его, затем повторите для следующего адреса.</p>
     </div>
 
     <p class="section-title">Дополнительно <?= $mode === 'update' ? '(новые данные — по желанию)' : '' ?></p>
@@ -583,7 +587,7 @@ if ($mysqli) {
   </form>
 </div>
 <script>
-var mailVerified = '';
+var verifiedMails = [];
 function postJson(url, data) {
   var fd = new FormData();
   var tok = document.querySelector('#anketa-form input[name=csrf]');
@@ -591,36 +595,57 @@ function postJson(url, data) {
   Object.keys(data).forEach(function(k) { fd.append(k, data[k]); });
   return fetch(url, {method: 'POST', body: fd, credentials: 'same-origin'}).then(function(r) { return r.json(); });
 }
-function mailNow() { return document.getElementById('mail').value.trim().toLowerCase(); }
+function mailList() {
+  var out = [];
+  document.getElementById('mail').value.split(/[,;\s]+/).forEach(function(x) {
+    x = x.trim().toLowerCase();
+    if (x && out.indexOf(x) < 0) out.push(x);
+  });
+  return out;
+}
+function pendingMails() { return mailList().filter(function(m) { return verifiedMails.indexOf(m) < 0; }); }
+function mailStatusText() {
+  var p = pendingMails(), l = mailList();
+  if (!l.length) return '';
+  if (!p.length) return 'Подтверждены все адреса';
+  return 'Ожидает подтверждения: ' + p.join(', ');
+}
+var curMail = '';
 document.getElementById('btn-send-code').addEventListener('click', function() {
   var st = document.getElementById('mail-status');
-  st.textContent = 'Отправляем…';
-  postJson('?ajax=send_code', {mail: mailNow()}).then(function(d) {
+  var p = pendingMails();
+  if (!p.length) { st.textContent = mailList().length ? 'Все адреса уже подтверждены' : 'Укажите e-mail'; return; }
+  curMail = p[0];
+  st.textContent = 'Отправляем код на ' + curMail + '…';
+  postJson('?ajax=send_code', {mail: curMail}).then(function(d) {
     st.textContent = d.msg;
     if (d.ok) document.getElementById('code-box').style.display = 'inline';
   }).catch(function() { st.textContent = 'Ошибка сети'; });
 });
 document.getElementById('btn-check-code').addEventListener('click', function() {
   var st = document.getElementById('mail-status');
-  postJson('?ajax=check_code', {mail: mailNow(), code: document.getElementById('mail-code').value}).then(function(d) {
-    st.textContent = d.msg;
-    if (d.ok) { mailVerified = mailNow(); document.getElementById('code-box').style.display = 'none'; }
+  postJson('?ajax=check_code', {mail: curMail, code: document.getElementById('mail-code').value}).then(function(d) {
+    if (d.ok) {
+      verifiedMails.push(curMail);
+      document.getElementById('code-box').style.display = 'none';
+      document.getElementById('mail-code').value = '';
+      st.textContent = d.msg + '. ' + mailStatusText();
+    } else {
+      st.textContent = d.msg;
+    }
   }).catch(function() { st.textContent = 'Ошибка сети'; });
 });
 document.getElementById('mail').addEventListener('input', function() {
-  if (mailNow() !== mailVerified) {
-    mailVerified = '';
-    document.getElementById('mail-status').textContent = '';
-  }
+  document.getElementById('mail-status').textContent = mailStatusText();
 });
 // исходные значения выбранного игрока: при отправке «не изменено» не передаём (в анкете остаются только явные правки)
 var origValues = {};
 document.getElementById('anketa-form').addEventListener('submit', function(e) {
   var mode = document.querySelector('input[name=mode]:checked').value;
-  var m = mailNow();
-  if (m === '' || m !== mailVerified) {
+  if (!mailList().length || pendingMails().length) {
     e.preventDefault();
-    document.getElementById('mail-status').textContent = 'Подтвердите e-mail кодом из письма';
+    document.getElementById('mail-status').textContent = mailList().length
+      ? 'Подтвердите кодом каждый адрес. ' + mailStatusText() : 'Укажите e-mail';
     return;
   }
   if (mode === 'update') {
