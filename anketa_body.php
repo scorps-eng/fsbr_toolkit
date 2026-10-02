@@ -171,14 +171,13 @@ if ($A) {
         $targetPid = (int)$_GET['cand'];
     }
     if ($targetPid !== null) {
-        $pa = ab_rows($db, "SELECT * FROM aux_questionaries WHERE player_id = {$targetPid} AND id < {$aid}
-            AND (status IS NULL OR status <> 'rejected') ORDER BY id DESC LIMIT 1"); // последняя заполненная анкета
+        $pa = ab_rows($db, "SELECT * FROM questionaries WHERE player_id = {$targetPid} ORDER BY id DESC LIMIT 1"); // последняя заполненная анкета
         if ($pa) {
             $prev = array_intersect_key($pa[0], $prev) + $prev;
-            $prevSrc = 'Предыдущая анкета #' . $pa[0]['id'] . ' от ' . $pa[0]['timestamp'];
+            $prevSrc = 'Анкета игрока #' . $pa[0]['id'] . ' от ' . $pa[0]['timestamp'];
         } else {
             $prev = ab_player_as_anketa($db, $targetPid, $birthCol);
-            $prevSrc = 'Текущие данные из базы (прошлой анкеты нет)';
+            $prevSrc = 'Текущие данные из базы (анкет игрока нет)';
         }
     } elseif ($A['type'] === 'a') {
         $fam = $db->real_escape_string((string)$A['firstname']);
@@ -240,17 +239,11 @@ if ($post && $A && $act === 'build') {
         } elseif (in_array('city', $changed, true) && $cityId === null) {
             $aux_error = 'Город изменён — выберите его из справочника';
         }
-        foreach (['WBF', 'acbl'] as $nf) {
-            if ($newForm[$nf] !== null && !ctype_digit((string)$newForm[$nf])) {
-                $aux_error = "Поле {$nf} должно быть числом (в базе числовая колонка)";
-            }
-        }
         if (!$aux_error) {
             $sql = anketa_build_sql($newForm, $changed, $esc, $targetPid, [
                 'aux_id' => $aid, 'type' => $A['type'], 'user' => (string)(app_config()['auth_user'] ?? ''),
                 'city_id' => $cityId, 'birth_col' => $birthCol,
                 'players_lu' => isset($plCols['lastupdated']),
-                'ext_lu' => isset($extCols['lastupdated']),
             ]);
             $_SESSION['aux_sql'] = ['aid' => $aid, 'sql' => $sql];
             $_SESSION['aux_nonce'] = bin2hex(random_bytes(16));

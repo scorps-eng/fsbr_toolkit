@@ -253,9 +253,9 @@ function anketa_build_sql(array $new, array $changed, callable $esc, ?int $playe
         $cols['city_id'] = $int($ctx['city_id'] ?? null);
     }
     if ($isNew) {
-        // новый игрок: state=1, разряд 30 если у города есть razr_coeff, иначе 5; lifetime — пустая строка
+        // новый игрок: state=1, разряд 30 если у города задан razr_coeff (в т.ч. 0), иначе 5; lifetime — пустая строка
         $cols['state'] = '1';
-        $cols['razr'] = 'IF(IFNULL((SELECT razr_coeff FROM cities WHERE city_id = ' . $int($ctx['city_id'] ?? null) . '), 0) > 0, 30, 5)';
+        $cols['razr'] = 'IF((SELECT razr_coeff FROM cities WHERE city_id = ' . $int($ctx['city_id'] ?? null) . ') IS NOT NULL, 30, 5)';
         $cols['lifetime'] = "''";
     }
     if (!empty($ctx['birth_col']) && ($isNew || in_array('birthdate', $changed, true))) {
@@ -274,28 +274,6 @@ function anketa_build_sql(array $new, array $changed, callable $esc, ?int $playe
             $set[] = "{$c} = {$v}";
         }
         $L[] = 'UPDATE players SET ' . implode(', ', $set) . ' WHERE player_id = @pid;';
-    }
-
-    // external_ids
-    $extMap = ['bbo' => 'bbo', 'gambler' => 'gambler', 'WBF' => 'wbf', 'acbl' => 'acbl'];
-    $extCols = [];
-    foreach ($extMap as $f => $col) {
-        if ($isNew ? !anketa_empty($f, $new[$f] ?? null) : in_array($f, $changed, true)) {
-            $extCols[$col] = $esc($new[$f] ?? null);
-        }
-    }
-    if ($extCols && !empty($ctx['ext_lu'])) {
-        $extCols['lastupdated'] = 'NOW()';
-    }
-    if ($extCols) {
-        $set = [];
-        foreach ($extCols as $c => $v) {
-            $set[] = "{$c} = {$v}";
-        }
-        $L[] = 'UPDATE external_ids SET ' . implode(', ', $set) . ' WHERE player_id = @pid;';
-        $L[] = 'INSERT INTO external_ids (player_id, ' . implode(', ', array_keys($extCols)) . ')';
-        $L[] = 'SELECT @pid, ' . implode(', ', array_values($extCols))
-            . ' FROM (SELECT 1) t WHERE NOT EXISTS (SELECT 1 FROM external_ids WHERE player_id = @pid);';
     }
 
     // students
@@ -317,6 +295,22 @@ function anketa_build_sql(array $new, array $changed, callable $esc, ?int $playe
         $L[] = 'SELECT @pid, ' . implode(', ', array_values($stuCols))
             . ' FROM (SELECT 1) t WHERE NOT EXISTS (SELECT 1 FROM students WHERE player_id = @pid);';
     }
+
+    // новая (итоговая) анкета фиксируется в questionaries — это «последняя заполненная анкета» игрока
+    $qv = [];
+    foreach (ANKETA_FIELDS as $f) {
+        if (in_array($f, ['sex', 'club_id'], true)) {
+            $qv[$f] = $int($new[$f] ?? null);
+        } elseif (in_array($f, ['is_sputnik', 'is_sirius'], true)) {
+            $qv[$f] = anketa_empty($f, $new[$f] ?? null) ? '0' : '1';
+        } elseif (in_array($f, ['birthdate', 'first_tourn'], true)) {
+            $qv[$f] = $esc(anketa_norm($f, $new[$f] ?? null) ?: null);
+        } else {
+            $qv[$f] = $esc($new[$f] ?? null);
+        }
+    }
+    $L[] = 'INSERT INTO questionaries (player_id, type, timestamp, ' . implode(', ', ANKETA_FIELDS) . ')';
+    $L[] = 'VALUES (@pid, ' . $esc($isNew ? 'a' : 'e') . ', NOW(), ' . implode(', ', $qv) . ');';
 
     $L[] = 'UPDATE aux_questionaries SET status = ' . $esc('accepted') . ', processed_at = NOW(), processed_by = '
         . $esc($ctx['user']) . ', result_player_id = @pid WHERE id = ' . (int)$ctx['aux_id'] . ' AND status IS NULL;';

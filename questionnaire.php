@@ -266,11 +266,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_anketa'])) {
         $verifyStatus = null;
         if ($mode === 'update') {
             $prev = ['birthdate' => null, 'phone' => null, 'mail' => null];
-            $qr = $mysqli->query("SELECT birthdate, phone, mail FROM aux_questionaries
-                WHERE player_id = {$playerId} AND (status IS NULL OR status <> 'rejected')
-                ORDER BY id DESC LIMIT 1");
-            if ($qr && ($pr = $qr->fetch_assoc())) {
-                $prev = $pr;
+            // последняя заполненная анкета игрока (questionaries), иначе последняя из очереди
+            foreach (['questionaries', 'aux_questionaries'] as $qt) {
+                $qr = $mysqli->query("SELECT birthdate, phone, mail FROM {$qt} WHERE player_id = {$playerId}"
+                    . ($qt === 'aux_questionaries' ? " AND (status IS NULL OR status <> 'rejected')" : '') . ' ORDER BY id DESC LIMIT 1');
+                if ($qr && ($pr = $qr->fetch_assoc())) {
+                    $prev = $pr;
+                    break;
+                }
             }
             if (!$prev['phone'] || !$prev['mail'] || !$prev['birthdate']) {
                 $bcol = '';

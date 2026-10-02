@@ -54,3 +54,7 @@ GRANT SELECT, INSERT, UPDATE         ON fsbr_copy.external_ids      TO 'fsbr_tk_
 GRANT SELECT, INSERT, UPDATE         ON fsbr_copy.students          TO 'fsbr_tk_rw'@'%';
 GRANT SELECT                         ON fsbr_copy.clubs             TO 'fsbr_tk_rw'@'%';
 -- (cities: SELECT уже выдан выше). Анкета (учётка q) пишет и читает новые колонки в рамках своих прав INSERT/SELECT.
+
+-- 5. Анкеты: итоговая анкета пишется в questionaries; её читает и публичная форма (сверка личности)
+GRANT SELECT, INSERT ON fsbr_copy.questionaries TO 'fsbr_tk_rw'@'%';
+GRANT SELECT         ON fsbr_copy.questionaries TO 'fsbr_tk_q'@'%';
