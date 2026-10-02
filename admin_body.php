@@ -28,20 +28,20 @@ if ((string)($_GET['t'] ?? '') === 'log') {
     $titles = array_combine(array_keys(ADM_TABLES), $tt);
     ?>
 <style>
-.ad-card{background:var(--card);border-radius:10px;padding:16px;margin-bottom:14px}
-.ad-table{width:100%;border-collapse:collapse;font-size:.9rem}
-.ad-table th,.ad-table td{padding:6px 8px;border-bottom:1px solid #2a3548;text-align:left;vertical-align:top}
-.ad-ok{color:var(--ok)}.ad-bad{color:var(--err)}.ad-mut{color:var(--muted)}
+.sp-card{background:var(--card);border-radius:10px;padding:16px;margin-bottom:14px}
+.sp-table{width:100%;border-collapse:collapse;font-size:.9rem}
+.sp-table th,.sp-table td{padding:6px 8px;border-bottom:1px solid #2a3548;text-align:left;vertical-align:top}
+.sp-ok{color:var(--ok)}.sp-bad{color:var(--err)}.sp-mut{color:var(--muted)}
 </style>
-<div class="ad-card">
+<div class="sp-card">
   <?php foreach (ADM_TABLES as $k => $d): ?><a class="tab" href="?tab=admin&t=<?= h($k) ?>"><?= h($d['title']) ?></a><?php endforeach; ?>
   <a class="tab active" href="?tab=admin&t=log">Журнал правок</a>
 </div>
-<div class="ad-card">
+<div class="sp-card">
   <b>Журнал правок справочников</b>
-  <p class="ad-mut">Отдельно от «Истории» загрузок турниров. Хранится в <code>data/admin_log.json.php</code>, последние 1000 записей.</p>
-  <?php if (!$log): ?><p class="ad-mut">Пока правок не было.</p><?php else: ?>
-  <table class="ad-table">
+  <p class="sp-mut">Отдельно от «Истории» загрузок турниров. Хранится в <code>data/admin_log.json.php</code>, последние 1000 записей.</p>
+  <?php if (!$log): ?><p class="sp-mut">Пока правок не было.</p><?php else: ?>
+  <table class="sp-table">
     <tr><th>Время</th><th>Кто</th><th>Таблица</th><th>ID</th><th>Действие</th><th>Что изменено (было → стало)</th><th>Итог</th></tr>
     <?php foreach ($log as $r): ?>
     <tr>
@@ -50,9 +50,9 @@ if ((string)($_GET['t'] ?? '') === 'log') {
       <td><?= h($titles[$r['table'] ?? ''] ?? (string)($r['table'] ?? '')) ?></td>
       <td><?= (int)($r['id'] ?? 0) ?></td>
       <td><?= ($r['action'] ?? '') === 'insert' ? 'добавление' : 'правка' ?></td>
-      <td><?php foreach (($r['diff'] ?? []) as $d): ?><div><?= h((string)$d[0]) ?>: <span class="ad-mut"><?= h((string)$d[1]) ?></span> → <?= h((string)$d[2]) ?></div><?php endforeach; ?>
-        <details><summary class="ad-mut">SQL</summary><code><?= h((string)($r['sql'] ?? '')) ?></code></details></td>
-      <td><?= !empty($r['ok']) ? '<span class="ad-ok">OK</span>' : '<span class="ad-bad">ошибка</span> ' . h((string)($r['error'] ?? '')) ?></td>
+      <td><?php foreach (($r['diff'] ?? []) as $d): ?><div><?= h((string)$d[0]) ?>: <span class="sp-mut"><?= h((string)$d[1]) ?></span> → <?= h((string)$d[2]) ?></div><?php endforeach; ?>
+        <details><summary class="sp-mut">SQL</summary><code><?= h((string)($r['sql'] ?? '')) ?></code></details></td>
+      <td><?= !empty($r['ok']) ? '<span class="sp-ok">OK</span>' : '<span class="sp-bad">ошибка</span> ' . h((string)($r['error'] ?? '')) ?></td>
     </tr>
     <?php endforeach; ?>
   </table>
@@ -234,24 +234,24 @@ if ($post && $act === 'run') {
 // ---------- вывод ----------
 ?>
 <style>
-.ad-card{background:var(--card);border-radius:10px;padding:16px;margin-bottom:14px}
-.ad-table{width:100%;border-collapse:collapse;font-size:.9rem}
-.ad-table th,.ad-table td{padding:6px 8px;border-bottom:1px solid #2a3548;text-align:left;vertical-align:top}
-.ad-in,.ad-table input[type=text],.ad-table input[type=date],.ad-table select,.ad-table textarea{width:100%;padding:5px 7px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:var(--text)}
-.ad-ok{color:var(--ok)}.ad-bad{color:var(--err)}.ad-warn{color:var(--warn)}.ad-mut{color:var(--muted)}
-.ad-btn{background:var(--accent);color:#0f172a;border:0;padding:8px 14px;border-radius:6px;font-weight:600;cursor:pointer;text-decoration:none;display:inline-block}
-.ad-btn.sec{background:#334155;color:var(--text)}
-pre.ad-sql{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;font-size:.85rem}
+.sp-card{background:var(--card);border-radius:10px;padding:16px;margin-bottom:14px}
+.sp-table{width:100%;border-collapse:collapse;font-size:.9rem}
+.sp-table th,.sp-table td{padding:6px 8px;border-bottom:1px solid #2a3548;text-align:left;vertical-align:top}
+.sp-in,.sp-table input[type=text],.sp-table input[type=date],.sp-table select,.sp-table textarea{width:100%;padding:5px 7px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:var(--text)}
+.sp-ok{color:var(--ok)}.sp-bad{color:var(--err)}.sp-warn{color:var(--warn)}.sp-mut{color:var(--muted)}
+.sp-btn{background:var(--accent);color:#0f172a;border:0;padding:8px 14px;border-radius:6px;font-weight:600;cursor:pointer;text-decoration:none;display:inline-block}
+.sp-btn.sec{background:#334155;color:var(--text)}
+pre.sp-sql{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;font-size:.85rem}
 </style>
 
-<div class="ad-card">
+<div class="sp-card">
   <?php foreach (ADM_TABLES as $k => $d): ?>
     <a class="tab<?= $k === $t ? ' active' : '' ?>" href="?tab=admin&t=<?= h($k) ?>"><?= h($d['title']) ?></a>
   <?php endforeach; ?>
   <a class="tab" href="?tab=admin&t=log">Журнал правок</a>
 </div>
-<?php if ($info): ?><div class="ad-card ad-ok"><?= h($info) ?></div><?php endif; ?>
-<?php if ($err): ?><div class="ad-card ad-bad"><?= h($err) ?></div><?php endif; ?>
+<?php if ($info): ?><div class="sp-card sp-ok"><?= h($info) ?></div><?php endif; ?>
+<?php if ($err): ?><div class="sp-card sp-bad"><?= h($err) ?></div><?php endif; ?>
 
 <?php if ($row || $isNew): ?>
 <?php
@@ -265,36 +265,36 @@ pre.ad-sql{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;font-
     };
 ?>
 <p><a href="?tab=admin&t=<?= h($t) ?>">← к списку</a></p>
-<form method="post" class="ad-card"><?= csrf_field() ?>
+<form method="post" class="sp-card"><?= csrf_field() ?>
   <input type="hidden" name="tab" value="admin"><input type="hidden" name="t" value="<?= h($t) ?>">
   <input type="hidden" name="id" value="<?= $isNew ? 0 : $id ?>"><?php if ($isNew): ?><input type="hidden" name="is_new" value="1"><?php endif; ?>
   <b><?= h($def['title']) ?>: <?= $isNew ? 'новая запись' : h($pk) . ' = ' . $id ?></b>
-  <table class="ad-table" style="margin-top:8px">
+  <table class="sp-table" style="margin-top:8px">
     <?php foreach ($cols as $c => $m): ?>
     <tr>
-      <td style="width:30%"><?= h(ADM_LABELS[$c] ?? $c) ?> <span class="ad-mut">(<?= h($c) ?>)</span></td>
+      <td style="width:30%"><?= h(ADM_LABELS[$c] ?? $c) ?> <span class="sp-mut">(<?= h($c) ?>)</span></td>
       <td>
       <?php if ($c === $pk || in_array($c, $def['auto'], true) || !$m['editable']): ?>
-        <span class="ad-mut"><?= $isNew ? '(автоматически)' : h((string)($row[$c] ?? '')) ?></span>
+        <span class="sp-mut"><?= $isNew ? '(автоматически)' : h((string)($row[$c] ?? '')) ?></span>
       <?php elseif ($c === 'city_id'): ?>
-        <select name="f_city_id" class="ad-in"><option value="">—</option>
+        <select name="f_city_id" class="sp-in"><option value="">—</option>
           <?php foreach ($cityMap as $cid => $cn): ?><option value="<?= $cid ?>" <?= $valOf($c) === (string)$cid ? 'selected' : '' ?>><?= h($cn) ?> (<?= $cid ?>)</option><?php endforeach; ?>
         </select>
       <?php elseif ($c === 'club_id'): ?>
-        <select name="f_club_id" class="ad-in"><option value="">—</option>
+        <select name="f_club_id" class="sp-in"><option value="">—</option>
           <?php foreach ($clubMap as $cid => $cn): ?><option value="<?= $cid ?>" <?= $valOf($c) === (string)$cid ? 'selected' : '' ?>><?= h($cn) ?> (<?= $cid ?>)</option><?php endforeach; ?>
         </select>
       <?php elseif ($c === 'sex'): ?>
-        <select name="f_sex" class="ad-in">
+        <select name="f_sex" class="sp-in">
           <option value="1" <?= $valOf($c) === '1' ? 'selected' : '' ?>>Мужской</option>
           <option value="0" <?= $valOf($c) === '0' ? 'selected' : '' ?>>Женский</option>
         </select>
       <?php elseif ($m['kind'] === 'date'): ?>
-        <input type="date" class="ad-in" name="f_<?= h($c) ?>" value="<?= h($valOf($c)) ?>">
+        <input type="date" class="sp-in" name="f_<?= h($c) ?>" value="<?= h($valOf($c)) ?>">
       <?php elseif ($m['kind'] === 'text' && ($m['len'] ?? 0) > 255): ?>
-        <textarea class="ad-in" rows="3" name="f_<?= h($c) ?>"><?= h($valOf($c)) ?></textarea>
+        <textarea class="sp-in" rows="3" name="f_<?= h($c) ?>"><?= h($valOf($c)) ?></textarea>
       <?php else: ?>
-        <input type="text" class="ad-in" name="f_<?= h($c) ?>" value="<?= h($valOf($c)) ?>"
+        <input type="text" class="sp-in" name="f_<?= h($c) ?>" value="<?= h($valOf($c)) ?>"
           <?= $m['kind'] === 'text' && $m['len'] ? 'maxlength="' . (int)$m['len'] . '"' : '' ?>
           <?= $m['kind'] === 'datetime' ? 'placeholder="ГГГГ-ММ-ДД ЧЧ:ММ:СС"' : '' ?>>
       <?php endif; ?>
@@ -302,17 +302,17 @@ pre.ad-sql{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;font-
     </tr>
     <?php endforeach; ?>
   </table>
-  <p style="margin-top:12px"><button class="ad-btn" type="submit" name="act" value="build">Сформировать SQL</button></p>
+  <p style="margin-top:12px"><button class="sp-btn" type="submit" name="act" value="build">Сформировать SQL</button></p>
 </form>
 
 <?php if ($sqlPreview): ?>
-<div class="ad-card">
+<div class="sp-card">
   <b>Что изменится</b>
-  <table class="ad-table" style="margin-top:6px">
+  <table class="sp-table" style="margin-top:6px">
     <tr><th>Поле</th><th>Было</th><th>Станет</th></tr>
     <?php foreach ($diffRows as [$fl, $o, $n]): ?><tr><td><?= h($fl) ?></td><td><?= h($o) ?></td><td><?= h($n) ?></td></tr><?php endforeach; ?>
   </table>
-  <pre class="ad-sql"><?= h($sqlPreview) ?></pre>
+  <pre class="sp-sql"><?= h($sqlPreview) ?></pre>
   <form method="post" onsubmit="return confirm('Выполнить SQL в базе?');"><?= csrf_field() ?>
     <input type="hidden" name="tab" value="admin"><input type="hidden" name="t" value="<?= h($t) ?>">
     <input type="hidden" name="id" value="<?= $isNew ? 0 : $id ?>"><?php if ($isNew): ?><input type="hidden" name="is_new" value="1"><?php endif; ?>
@@ -320,7 +320,7 @@ pre.ad-sql{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;font-
     <input type="hidden" name="adm_nonce" value="<?= h((string)($_SESSION['adm_nonce'] ?? '')) ?>">
     <input type="hidden" name="sql_script" value="<?= h($sqlPreview) ?>">
     <label><input type="checkbox" name="confirm_run" value="1" required> Проверил(а) изменения, выполнить</label>
-    <button class="ad-btn" type="submit">Выполнить</button>
+    <button class="sp-btn" type="submit">Выполнить</button>
   </form>
 </div>
 <?php endif; ?>
@@ -347,17 +347,17 @@ pre.ad-sql{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;font-
     $list = adm_rows($db, 'SELECT `' . implode('`, `', $listCols) . "` FROM `{$t}` WHERE {$where} ORDER BY {$def['order']} LIMIT {$perPage} OFFSET " . (($page - 1) * $perPage));
     $pages = max(1, (int)ceil($total / $perPage));
 ?>
-<div class="ad-card">
+<div class="sp-card">
   <form method="get" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
     <input type="hidden" name="tab" value="admin"><input type="hidden" name="t" value="<?= h($t) ?>">
     <input type="text" name="q" value="<?= h($q) ?>" placeholder="поиск: <?= h(implode(', ', $def['search'])) ?> или ID" style="padding:6px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:var(--text);min-width:260px">
-    <button class="ad-btn sec" type="submit">Найти</button>
-    <?php if ($def['insert']): ?><a class="ad-btn" href="?tab=admin&t=<?= h($t) ?>&new=1">+ Добавить</a><?php endif; ?>
-    <span class="ad-mut">Найдено: <?= $total ?></span>
+    <button class="sp-btn sec" type="submit">Найти</button>
+    <?php if ($def['insert']): ?><a class="sp-btn" href="?tab=admin&t=<?= h($t) ?>&new=1">+ Добавить</a><?php endif; ?>
+    <span class="sp-mut">Найдено: <?= $total ?></span>
   </form>
 </div>
-<div class="ad-card">
-  <table class="ad-table">
+<div class="sp-card">
+  <table class="sp-table">
     <tr><?php foreach ($listCols as $c): ?><th><?= h(ADM_LABELS[$c] ?? $c) ?></th><?php endforeach; ?><th></th></tr>
     <?php foreach ($list as $r): ?>
     <tr>
@@ -365,8 +365,8 @@ pre.ad-sql{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;font-
       <td><?php
           $v = $r[$c];
           echo h((string)$v);
-          if ($c === 'city_id' && $v !== null && isset($cityMap[(int)$v])) { echo ' <span class="ad-mut">' . h($cityMap[(int)$v]) . '</span>'; }
-          if ($c === 'club_id' && $v !== null && isset($clubMap[(int)$v])) { echo ' <span class="ad-mut">' . h($clubMap[(int)$v]) . '</span>'; }
+          if ($c === 'city_id' && $v !== null && isset($cityMap[(int)$v])) { echo ' <span class="sp-mut">' . h($cityMap[(int)$v]) . '</span>'; }
+          if ($c === 'club_id' && $v !== null && isset($clubMap[(int)$v])) { echo ' <span class="sp-mut">' . h($clubMap[(int)$v]) . '</span>'; }
       ?></td>
       <?php endforeach; ?>
       <td><a href="?tab=admin&t=<?= h($t) ?>&id=<?= (int)$r[$pk] ?>">Изменить</a></td>
@@ -375,7 +375,7 @@ pre.ad-sql{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;font-
     <?php if (!$list): ?><tr><td colspan="<?= count($listCols) + 1 ?>">Ничего не найдено</td></tr><?php endif; ?>
   </table>
   <?php if ($pages > 1): ?>
-  <p class="ad-mut" style="margin-top:10px">
+  <p class="sp-mut" style="margin-top:10px">
     Страница <?= $page ?> из <?= $pages ?>:
     <?php if ($page > 1): ?><a href="?tab=admin&t=<?= h($t) ?>&q=<?= h(urlencode($q)) ?>&p=<?= $page - 1 ?>">← назад</a><?php endif; ?>
     <?php if ($page < $pages): ?><a href="?tab=admin&t=<?= h($t) ?>&q=<?= h(urlencode($q)) ?>&p=<?= $page + 1 ?>">вперёд →</a><?php endif; ?>
