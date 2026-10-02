@@ -611,7 +611,11 @@ if ($mysqli) {
     <select name="club_id" id="club_id">
       <option value="">— не указан —</option>
       <?php
-      $clubKey = fn($c) => str_replace('ё', 'е', mb_strtolower((string)($c['shortname'] ?: $c['name'])));
+      // кириллица первой, латиница (и прочее) — в конец списка
+      $clubKey = function ($c) {
+          $n = str_replace('ё', 'е', mb_strtolower((string)($c['shortname'] ?: $c['name'])));
+          return (preg_match('/^[а-я]/u', $n) ? '0' : '1') . $n;
+      };
       usort($clubs, fn($a, $b) => strcmp($clubKey($a), $clubKey($b)));
       foreach ($clubs as $cl): ?>
       <option value="<?= (int)$cl['club_id'] ?>"><?= h($cl['shortname'] ?: $cl['name']) ?></option>
