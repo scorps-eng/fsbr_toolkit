@@ -80,6 +80,18 @@ function ab_fmt(string $f, $v, array $cities, array $clubs): string
     return (string)$v;
 }
 
+$mailTestMsg = null;
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ($_POST['tab'] ?? '') === 'anketa' && ($_POST['act'] ?? '') === 'mailtest') {
+    $to = trim((string)($_POST['test_to'] ?? ''));
+    if (!mail_address_ok($to)) {
+        $mailTestMsg = ['bad', 'Укажите корректный адрес для теста'];
+    } elseif (app_send_mail($to, 'Проверка отправки FSBR Toolkit', "Это тестовое письмо. Если вы его видите — отправка настроена.\n")) {
+        $mailTestMsg = ['ok', 'Письмо отправлено на ' . $to . ' (проверьте и папку «Спам»)'];
+    } else {
+        $e = data_read_json(app_data_dir() . '/mail_error.json.php');
+        $mailTestMsg = ['bad', 'Не отправлено: ' . ($e['msg'] ?? 'причина неизвестна')];
+    }
+}
 $mailErr = data_read_json(app_data_dir() . '/mail_error.json.php');
 if (!empty($mailErr['msg'])) {
     echo '<div class="card" style="color:var(--warn)">Последний сбой отправки писем (' . h($mailErr['t'] ?? '') . '): ' . h($mailErr['msg']) . '</div>';
@@ -324,6 +336,21 @@ pre.ab-sql{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;font-
 <?php if ($aux_error): ?><div class="ab-card ab-bad"><?= h($aux_error) ?></div><?php endif; ?>
 
 <?php if (!$A): ?>
+<?php
+    $mc = app_config();
+    $mailSummary = 'transport=' . ($mc['mail_transport'] ?? 'mail') . ', from=' . ($mc['mail_from'] ?? '')
+        . (($mc['mail_transport'] ?? 'mail') === 'smtp'
+            ? ', host=' . ($mc['smtp_host'] ?? '') . ', port=' . ($mc['smtp_port'] ?? '') . ', secure=' . ($mc['smtp_secure'] ?? '') . ', user=' . ($mc['smtp_user'] ?? '')
+            : '');
+?>
+<div class="ab-card">
+  <b>Проверка отправки писем</b> <span style="color:var(--muted)">(<?= h($mailSummary) ?>)</span>
+  <?php if ($mailTestMsg): ?><p class="ab-<?= $mailTestMsg[0] ?>"><?= h($mailTestMsg[1]) ?></p><?php endif; ?>
+  <form method="post"><?= csrf_field() ?><input type="hidden" name="tab" value="anketa"><input type="hidden" name="act" value="mailtest">
+    <input type="text" name="test_to" placeholder="ваш e-mail для теста" style="padding:6px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:var(--text)">
+    <button class="ab-btn sec" type="submit">Отправить тест</button>
+  </form>
+</div>
 <?php
     $flt = (string)($_GET['st'] ?? 'pending');
     $where = $flt === 'accepted' ? "status = 'accepted'" : ($flt === 'rejected' ? "status = 'rejected'" : 'status IS NULL');
