@@ -253,9 +253,10 @@ function anketa_build_sql(array $new, array $changed, callable $esc, ?int $playe
         $cols['city_id'] = $int($ctx['city_id'] ?? null);
     }
     if ($isNew) {
-        // новый игрок: state=1, разряд 30 если у города задан razr_coeff (в т.ч. 0), иначе 5; lifetime — пустая строка
-        $cols['state'] = '1';
-        $cols['razr'] = 'IF((SELECT razr_coeff FROM cities WHERE city_id = ' . $int($ctx['city_id'] ?? null) . ') IS NOT NULL, 30, 5)';
+        // новый игрок: state=2 и разряд 30 если у города задан razr_coeff (в т.ч. 0), иначе state=1 и разряд 5; lifetime — пустая строка
+        $hasCoeff = '(SELECT razr_coeff FROM cities WHERE city_id = ' . $int($ctx['city_id'] ?? null) . ') IS NOT NULL';
+        $cols['state'] = "IF({$hasCoeff}, 2, 1)";
+        $cols['razr'] = "IF({$hasCoeff}, 30, 5)";
         $cols['lifetime'] = "''";
     }
     if (!empty($ctx['birth_col']) && ($isNew || in_array('birthdate', $changed, true))) {
