@@ -268,7 +268,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_anketa'])) {
             $prev = ['birthdate' => null, 'phone' => null, 'mail' => null];
             $qr = $mysqli->query("SELECT birthdate, phone, mail FROM aux_questionaries
                 WHERE player_id = {$playerId} AND (status IS NULL OR status <> 'rejected')
-                ORDER BY (status = 'accepted') DESC, id DESC LIMIT 1");
+                ORDER BY id DESC LIMIT 1");
             if ($qr && ($pr = $qr->fetch_assoc())) {
                 $prev = $pr;
             }

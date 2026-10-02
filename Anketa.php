@@ -241,8 +241,6 @@ function anketa_build_sql(array $new, array $changed, callable $esc, ?int $playe
         'lastname' => ['lastname', fn($v) => $esc($v)],
         'surname' => ['surname', fn($v) => $esc($v)],
         'sex' => ['sex', $int],
-        'phone' => ['phone', fn($v) => $esc($v)],
-        'mail' => ['mail', fn($v) => $esc($v)],
         'club_id' => ['club_id', $int],
     ];
     $cols = [];
@@ -253,6 +251,12 @@ function anketa_build_sql(array $new, array $changed, callable $esc, ?int $playe
     }
     if ($isNew || in_array('city', $changed, true)) {
         $cols['city_id'] = $int($ctx['city_id'] ?? null);
+    }
+    if ($isNew) {
+        // новый игрок: state=1, разряд 30 если у города есть razr_coeff, иначе 5; lifetime — пустая строка
+        $cols['state'] = '1';
+        $cols['razr'] = 'IF(IFNULL((SELECT razr_coeff FROM cities WHERE city_id = ' . $int($ctx['city_id'] ?? null) . '), 0) > 0, 30, 5)';
+        $cols['lifetime'] = "''";
     }
     if (!empty($ctx['birth_col']) && ($isNew || in_array('birthdate', $changed, true))) {
         $cols[$ctx['birth_col']] = $esc(anketa_norm('birthdate', $new['birthdate'] ?? '') ?: null);

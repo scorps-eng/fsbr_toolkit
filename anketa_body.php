@@ -172,7 +172,7 @@ if ($A) {
     }
     if ($targetPid !== null) {
         $pa = ab_rows($db, "SELECT * FROM aux_questionaries WHERE player_id = {$targetPid} AND id < {$aid}
-            AND (status IS NULL OR status <> 'rejected') ORDER BY (status = 'accepted') DESC, id DESC LIMIT 1");
+            AND (status IS NULL OR status <> 'rejected') ORDER BY id DESC LIMIT 1"); // последняя заполненная анкета
         if ($pa) {
             $prev = array_intersect_key($pa[0], $prev) + $prev;
             $prevSrc = 'Предыдущая анкета #' . $pa[0]['id'] . ' от ' . $pa[0]['timestamp'];
