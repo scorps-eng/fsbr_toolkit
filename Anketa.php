@@ -257,6 +257,9 @@ function anketa_build_sql(array $new, array $changed, callable $esc, ?int $playe
     if (!empty($ctx['birth_col']) && ($isNew || in_array('birthdate', $changed, true))) {
         $cols[$ctx['birth_col']] = $esc(anketa_norm('birthdate', $new['birthdate'] ?? '') ?: null);
     }
+    if (!empty($ctx['players_lu']) && ($cols || $isNew)) {
+        $cols['lastupdated'] = 'NOW()';
+    }
     if ($isNew) {
         $cols = ['player_id' => '@pid'] + $cols;
         $L[] = 'INSERT INTO players (' . implode(', ', array_keys($cols)) . ')';
@@ -276,6 +279,9 @@ function anketa_build_sql(array $new, array $changed, callable $esc, ?int $playe
         if ($isNew ? !anketa_empty($f, $new[$f] ?? null) : in_array($f, $changed, true)) {
             $extCols[$col] = $esc($new[$f] ?? null);
         }
+    }
+    if ($extCols && !empty($ctx['ext_lu'])) {
+        $extCols['lastupdated'] = 'NOW()';
     }
     if ($extCols) {
         $set = [];

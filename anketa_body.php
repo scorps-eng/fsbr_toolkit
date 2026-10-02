@@ -103,6 +103,7 @@ if (!isset($auxCols['status'])) {
     return;
 }
 $plCols = ab_columns($db, 'players');
+$extCols = ab_columns($db, 'external_ids');
 $birthCol = null;
 foreach (['birthdate', 'birth_date', 'birthday', 'dob', 'bdate'] as $bc) {
     if (isset($plCols[$bc])) {
@@ -239,10 +240,17 @@ if ($post && $A && $act === 'build') {
         } elseif (in_array('city', $changed, true) && $cityId === null) {
             $aux_error = 'Город изменён — выберите его из справочника';
         }
+        foreach (['WBF', 'acbl'] as $nf) {
+            if ($newForm[$nf] !== null && !ctype_digit((string)$newForm[$nf])) {
+                $aux_error = "Поле {$nf} должно быть числом (в базе числовая колонка)";
+            }
+        }
         if (!$aux_error) {
             $sql = anketa_build_sql($newForm, $changed, $esc, $targetPid, [
                 'aux_id' => $aid, 'type' => $A['type'], 'user' => (string)(app_config()['auth_user'] ?? ''),
                 'city_id' => $cityId, 'birth_col' => $birthCol,
+                'players_lu' => isset($plCols['lastupdated']),
+                'ext_lu' => isset($extCols['lastupdated']),
             ]);
             $_SESSION['aux_sql'] = ['aid' => $aid, 'sql' => $sql];
             $_SESSION['aux_nonce'] = bin2hex(random_bytes(16));
