@@ -34,21 +34,31 @@ function ab_columns(mysqli $db, string $table): array
 }
 
 /** Текущие данные игрока из БД в формате анкеты. */
-function ab_player_as_anketa(mysqli $db, int $pid, ?string $birthCol): array
+function ab_player_as_anketa(mysqli $db, int $pid, ?string $birthCol, ?string &$src = null): array
 {
+    // Актуальные данные игрока собираются из источников:
+    //  players — ФИО, пол, дата рождения, город, клуб (БЕЗ phone/mail);
+    //  последняя анкета в questionaries — телефон, e-mail (и регион, которого нет в players);
+    //  external_ids — ники и ID; students — Спутник/Сириус/первый турнир.
     $a = array_fill_keys(ANKETA_FIELDS, null);
-    $sel = 'p.firstname, p.lastname, p.surname, p.sex, p.phone, p.mail, p.club_id, c.city_name'
+    $sel = 'p.firstname, p.lastname, p.surname, p.sex, p.club_id, c.city_name'
         . ($birthCol ? ', p.' . $birthCol . ' AS bd' : '');
     $r = ab_rows($db, "SELECT {$sel} FROM players p LEFT JOIN cities c ON c.city_id = p.city_id WHERE p.player_id = {$pid} LIMIT 1");
-    if (!$r) {
-        return $a;
+    if ($r) {
+        $p = $r[0];
+        foreach (['firstname', 'lastname', 'surname', 'sex', 'club_id'] as $f) {
+            $a[$f] = $p[$f];
+        }
+        $a['city'] = $p['city_name'];
+        $a['birthdate'] = $p['bd'] ?? null;
     }
-    $p = $r[0];
-    foreach (['firstname', 'lastname', 'surname', 'sex', 'phone', 'mail', 'club_id'] as $f) {
-        $a[$f] = $p[$f];
+    $qSrc = 'анкет игрока нет';
+    if ($q = ab_rows($db, "SELECT id, timestamp, phone, mail, region FROM questionaries WHERE player_id = {$pid} ORDER BY id DESC LIMIT 1")) {
+        $a['phone'] = $q[0]['phone'];
+        $a['mail'] = $q[0]['mail'];
+        $a['region'] = $q[0]['region'];
+        $qSrc = 'анкета #' . $q[0]['id'] . ' от ' . $q[0]['timestamp'];
     }
-    $a['city'] = $p['city_name'];
-    $a['birthdate'] = $p['bd'] ?? null;
     if ($e = ab_rows($db, "SELECT bbo, gambler, wbf, acbl FROM external_ids WHERE player_id = {$pid} LIMIT 1")) {
         $a['bbo'] = $e[0]['bbo'];
         $a['gambler'] = $e[0]['gambler'];
@@ -60,6 +70,7 @@ function ab_player_as_anketa(mysqli $db, int $pid, ?string $birthCol): array
         $a['is_sirius'] = $s[0]['sirius'];
         $a['first_tourn'] = $s[0]['first'];
     }
+    $src = 'Актуальные данные: players + external_ids + students; телефон, e-mail, регион — ' . $qSrc;
     return $a;
 }
 
@@ -183,14 +194,7 @@ if ($A) {
         $targetPid = (int)$_GET['cand'];
     }
     if ($targetPid !== null) {
-        $pa = ab_rows($db, "SELECT * FROM questionaries WHERE player_id = {$targetPid} ORDER BY id DESC LIMIT 1"); // последняя заполненная анкета
-        if ($pa) {
-            $prev = array_intersect_key($pa[0], $prev) + $prev;
-            $prevSrc = 'Анкета игрока #' . $pa[0]['id'] . ' от ' . $pa[0]['timestamp'];
-        } else {
-            $prev = ab_player_as_anketa($db, $targetPid, $birthCol);
-            $prevSrc = 'Текущие данные из базы (анкет игрока нет)';
-        }
+        $prev = ab_player_as_anketa($db, $targetPid, $birthCol, $prevSrc);
     } elseif ($A['type'] === 'a') {
         $fam = $db->real_escape_string((string)$A['firstname']);
         $mailCond = '';

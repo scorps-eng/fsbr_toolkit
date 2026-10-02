@@ -275,30 +275,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_anketa'])) {
         // обновление: сверка введённых «для проверки» данных с предыдущей анкетой (результат пользователю не показываем)
         $verifyStatus = null;
         if ($mode === 'update') {
+            // актуальные данные: дата рождения — players; телефон и e-mail — последняя анкета (questionaries)
             $prev = ['birthdate' => null, 'phone' => null, 'mail' => null];
-            // последняя заполненная анкета игрока (questionaries), иначе последняя из очереди
+            $bcol = '';
+            if ($cr = $mysqli->query('SHOW COLUMNS FROM players')) {
+                while ($c = $cr->fetch_assoc()) {
+                    if ($bcol === '' && in_array($c['Field'], ['birthdate', 'birth_date', 'birthday', 'dob', 'bdate'], true)) {
+                        $bcol = $c['Field'];
+                    }
+                }
+            }
+            if ($bcol && ($pq = $mysqli->query("SELECT {$bcol} AS bd FROM players WHERE player_id = {$playerId} LIMIT 1")) && ($pp = $pq->fetch_assoc())) {
+                $prev['birthdate'] = $pp['bd'];
+            }
             foreach (['questionaries', 'aux_questionaries'] as $qt) {
                 $qr = $mysqli->query("SELECT birthdate, phone, mail FROM {$qt} WHERE player_id = {$playerId}"
                     . ($qt === 'aux_questionaries' ? " AND (status IS NULL OR status <> 'rejected')" : '') . ' ORDER BY id DESC LIMIT 1');
                 if ($qr && ($pr = $qr->fetch_assoc())) {
-                    $prev = $pr;
+                    $prev['phone'] = $pr['phone'];
+                    $prev['mail'] = $pr['mail'];
+                    $prev['birthdate'] = $prev['birthdate'] ?: $pr['birthdate'];
                     break;
-                }
-            }
-            if (!$prev['phone'] || !$prev['mail'] || !$prev['birthdate']) {
-                $bcol = '';
-                if ($cr = $mysqli->query('SHOW COLUMNS FROM players')) {
-                    while ($c = $cr->fetch_assoc()) {
-                        if ($bcol === '' && in_array($c['Field'], ['birthdate', 'birth_date', 'birthday', 'dob', 'bdate'], true)) {
-                            $bcol = $c['Field'];
-                        }
-                    }
-                }
-                $pq = $mysqli->query('SELECT phone, mail' . ($bcol ? ", {$bcol} AS bd" : '') . " FROM players WHERE player_id = {$playerId} LIMIT 1");
-                if ($pq && ($pp = $pq->fetch_assoc())) {
-                    $prev['phone'] = $prev['phone'] ?: $pp['phone'];
-                    $prev['mail'] = $prev['mail'] ?: $pp['mail'];
-                    $prev['birthdate'] = $prev['birthdate'] ?: ($pp['bd'] ?? null);
                 }
             }
             $verifyStatus = anketa_verify_compare($prev, [
