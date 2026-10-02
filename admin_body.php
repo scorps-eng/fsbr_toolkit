@@ -22,6 +22,46 @@ if (!function_exists('adm_rows')) {
     }
 }
 
+if ((string)($_GET['t'] ?? '') === 'log') {
+    $log = adm_log_all(300);
+    $tt = array_column(ADM_TABLES, 'title');
+    $titles = array_combine(array_keys(ADM_TABLES), $tt);
+    ?>
+<style>
+.ad-card{background:var(--card);border-radius:10px;padding:16px;margin-bottom:14px}
+.ad-table{width:100%;border-collapse:collapse;font-size:.9rem}
+.ad-table th,.ad-table td{padding:6px 8px;border-bottom:1px solid #2a3548;text-align:left;vertical-align:top}
+.ad-ok{color:var(--ok)}.ad-bad{color:var(--err)}.ad-mut{color:var(--muted)}
+</style>
+<div class="ad-card">
+  <?php foreach (ADM_TABLES as $k => $d): ?><a class="tab" href="?tab=admin&t=<?= h($k) ?>"><?= h($d['title']) ?></a><?php endforeach; ?>
+  <a class="tab active" href="?tab=admin&t=log">Журнал правок</a>
+</div>
+<div class="ad-card">
+  <b>Журнал правок справочников</b>
+  <p class="ad-mut">Отдельно от «Истории» загрузок турниров. Хранится в <code>data/admin_log.json.php</code>, последние 1000 записей.</p>
+  <?php if (!$log): ?><p class="ad-mut">Пока правок не было.</p><?php else: ?>
+  <table class="ad-table">
+    <tr><th>Время</th><th>Кто</th><th>Таблица</th><th>ID</th><th>Действие</th><th>Что изменено (было → стало)</th><th>Итог</th></tr>
+    <?php foreach ($log as $r): ?>
+    <tr>
+      <td><?= h(date('Y-m-d H:i', strtotime((string)($r['ts'] ?? '')) ?: time())) ?></td>
+      <td><?= h((string)($r['user'] ?? '')) ?></td>
+      <td><?= h($titles[$r['table'] ?? ''] ?? (string)($r['table'] ?? '')) ?></td>
+      <td><?= (int)($r['id'] ?? 0) ?></td>
+      <td><?= ($r['action'] ?? '') === 'insert' ? 'добавление' : 'правка' ?></td>
+      <td><?php foreach (($r['diff'] ?? []) as $d): ?><div><?= h((string)$d[0]) ?>: <span class="ad-mut"><?= h((string)$d[1]) ?></span> → <?= h((string)$d[2]) ?></div><?php endforeach; ?>
+        <details><summary class="ad-mut">SQL</summary><code><?= h((string)($r['sql'] ?? '')) ?></code></details></td>
+      <td><?= !empty($r['ok']) ? '<span class="ad-ok">OK</span>' : '<span class="ad-bad">ошибка</span> ' . h((string)($r['error'] ?? '')) ?></td>
+    </tr>
+    <?php endforeach; ?>
+  </table>
+  <?php endif; ?>
+</div>
+<?php
+    return;
+}
+
 try {
     $db = db_rw();
 } catch (Throwable $e) {
@@ -134,7 +174,7 @@ if ($post && $act === 'build' && ($row || ($isNew && $def['insert']))) {
         }
     }
     if ($sqlPreview) {
-        $_SESSION['adm_sql'] = ['t' => $t, 'id' => $id, 'new' => $isNew, 'sql' => $sqlPreview];
+        $_SESSION['adm_sql'] = ['t' => $t, 'id' => $id, 'new' => $isNew, 'sql' => $sqlPreview, 'diff' => $diffRows];
         $_SESSION['adm_nonce'] = bin2hex(random_bytes(16));
     }
 }
@@ -163,6 +203,11 @@ if ($post && $act === 'run') {
             $newId = (int)$run->insert_id;
             $run->close();
             unset($_SESSION['adm_sql']);
+            adm_log_add([
+                'table' => $t, 'id' => $st['new'] ? $newId : (int)$st['id'], 'action' => $st['new'] ? 'insert' : 'update',
+                'user' => (string)(app_config()['auth_user'] ?? ''), 'ok' => $st['new'] || $aff >= 1,
+                'diff' => $st['diff'] ?? [], 'sql' => (string)$st['sql'],
+            ]);
             if ($st['new']) {
                 $info = 'Добавлено' . ($newId > 0 ? ' (ID ' . $newId . ')' : '');
                 $id = $newId > 0 ? $newId : (int)($st['id'] ?? 0);
@@ -177,6 +222,11 @@ if ($post && $act === 'run') {
             }
         } catch (Throwable $e) {
             $err = 'Ошибка выполнения: ' . $e->getMessage();
+            adm_log_add([
+                'table' => $t, 'id' => (int)($st['id'] ?? 0), 'action' => !empty($st['new']) ? 'insert' : 'update',
+                'user' => (string)(app_config()['auth_user'] ?? ''), 'ok' => false, 'error' => mb_substr($e->getMessage(), 0, 200),
+                'diff' => $st['diff'] ?? [], 'sql' => (string)($st['sql'] ?? ''),
+            ]);
         }
     }
 }
@@ -198,6 +248,7 @@ pre.ad-sql{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;font-
   <?php foreach (ADM_TABLES as $k => $d): ?>
     <a class="tab<?= $k === $t ? ' active' : '' ?>" href="?tab=admin&t=<?= h($k) ?>"><?= h($d['title']) ?></a>
   <?php endforeach; ?>
+  <a class="tab" href="?tab=admin&t=log">Журнал правок</a>
 </div>
 <?php if ($info): ?><div class="ad-card ad-ok"><?= h($info) ?></div><?php endif; ?>
 <?php if ($err): ?><div class="ad-card ad-bad"><?= h($err) ?></div><?php endif; ?>

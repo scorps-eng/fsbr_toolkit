@@ -218,3 +218,31 @@ function adm_name_key(string $n): string
     $n = str_replace('ё', 'е', mb_strtolower($n));
     return (preg_match('/^[^\p{L}]*[а-я]/u', $n) ? '0' : '1') . $n;
 }
+
+/** Журнал правок справочников (отдельный от истории загрузок), data/admin_log.json.php. */
+function adm_log_path(): string
+{
+    require_once __DIR__ . '/bootstrap.php';
+    return app_data_dir() . '/admin_log.json.php';
+}
+
+function adm_log_add(array $e): void
+{
+    require_once __DIR__ . '/bootstrap.php';
+    $f = adm_log_path();
+    $d = data_read_json($f);
+    $e['ts'] = date('c');
+    $d[] = $e;
+    if (count($d) > 1000) {
+        $d = array_slice($d, -1000);
+    }
+    data_write_json($f, $d, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+}
+
+/** @return list<array> новые сверху */
+function adm_log_all(int $limit = 300): array
+{
+    $f = adm_log_path();
+    $d = is_file($f) ? data_read_json($f) : [];
+    return array_slice(array_reverse($d), 0, $limit);
+}
