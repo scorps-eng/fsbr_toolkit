@@ -423,9 +423,9 @@ if ($mysqli) {
 <body>
 <div class="wrap">
   <?php
-    // логотип: свой файл logo.png/.jpg/.svg рядом с questionnaire.php, иначе — картинка заголовка из Google-формы
+    // шапка: banner.png (логотип ФСБР на сине-красном фоне) рядом с questionnaire.php; нет файла — картинка из Google-формы
     $logoSrc = 'https://lh6.googleusercontent.com/zPAalcF_88Vlp02_agJ2gjQtOnDL7Z8qhwiFOLHnn57OfXsF2I2lsWHyqLsqBmjmMcPV4ZlyXcB2sks=w1200-h630-p';
-    foreach (['logo.png', 'logo.jpg', 'logo.svg'] as $lf) {
+    foreach (['banner.png', 'banner.jpg', 'banner.svg'] as $lf) {
         if (is_file(__DIR__ . '/' . $lf)) {
             $logoSrc = $lf;
             break;
@@ -433,7 +433,7 @@ if ($mysqli) {
     }
   ?>
   <div class="card title-card" style="padding:0;overflow:hidden">
-    <img src="<?= h($logoSrc) ?>" alt="ФСБР" referrerpolicy="no-referrer" style="display:block;width:100%;max-height:200px;object-fit:cover">
+    <img src="<?= h($logoSrc) ?>" alt="ФСБР" referrerpolicy="no-referrer" style="display:block;width:100%;height:auto">
     <div style="padding:18px 24px 22px">
     <h1>Анкета игрока ФСБР</h1>
     <p class="sub">Федерация спортивного бриджа России. Информация из анкеты появится на сайте в начале следующего месяца.</p>
