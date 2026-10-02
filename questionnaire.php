@@ -274,6 +274,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_anketa'])) {
 
         // обновление: сверка введённых «для проверки» данных с предыдущей анкетой (результат пользователю не показываем)
         $verifyStatus = null;
+        $verifyData = null;
         if ($mode === 'update') {
             // актуальные данные: дата рождения — players; телефон и e-mail — последняя анкета (questionaries)
             $prev = ['birthdate' => null, 'phone' => null, 'mail' => null];
@@ -298,11 +299,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_anketa'])) {
                     break;
                 }
             }
-            $verifyStatus = anketa_verify_compare($prev, [
+            $givenV = [
                 'birthdate' => trim((string)($_POST['v_birthdate'] ?? '')),
                 'phone4' => trim((string)($_POST['v_phone4'] ?? '')),
                 'mail' => trim((string)($_POST['v_mail'] ?? '')),
-            ]);
+            ];
+            $verifyStatus = anketa_verify_compare($prev, $givenV);
+            // подробный отчёт (что ввёл человек и результат по каждому полю) — для оператора
+            $verifyData = json_encode(['entered' => $givenV, 'detail' => anketa_verify_detail($prev, $givenV)], JSON_UNESCAPED_UNICODE);
+            if (strlen((string)$verifyData) > 900) {
+                $verifyData = mb_substr((string)$verifyData, 0, 0); // защита от раздутых значений
+            }
         }
         $emailVerified = 1; // все адреса подтверждены (проверено выше)
 
@@ -310,6 +317,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_anketa'])) {
         $hasExtra = false;
         if ($cr = $mysqli->query("SHOW COLUMNS FROM aux_questionaries LIKE 'verify_status'")) {
             $hasExtra = $cr->num_rows > 0;
+        }
+        $hasData = false;
+        if ($cr = $mysqli->query("SHOW COLUMNS FROM aux_questionaries LIKE 'verify_data'")) {
+            $hasData = $cr->num_rows > 0;
         }
 
         $bbo = trim((string)($_POST['bbo'] ?? ''));
@@ -333,6 +344,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_anketa'])) {
         if ($hasExtra) {
             $extraCols = ', email_verified, verify_status';
             $extraVals = ', ' . $emailVerified . ', ' . ($verifyStatus === null ? 'NULL' : "'" . $mysqli->real_escape_string($verifyStatus) . "'");
+            if ($hasData) {
+                $extraCols .= ', verify_data';
+                $extraVals .= ', ' . ($verifyData === null || $verifyData === '' ? 'NULL' : "'" . $mysqli->real_escape_string($verifyData) . "'");
+            }
         }
         // fsbr_copy.aux_questionaries (текущая БД из config)
         $sql = "INSERT INTO aux_questionaries

@@ -66,3 +66,6 @@ ALTER TABLE fsbr_copy.questionaries     MODIFY mail VARCHAR(255) NULL;
 ALTER TABLE fsbr_copy.aux_questionaries
   MODIFY player_id SMALLINT UNSIGNED NULL,
   MODIFY club_id   SMALLINT UNSIGNED NULL;
+
+-- 7. Подробный отчёт о подтверждении личности (что ввёл человек и результат по полям)
+ALTER TABLE fsbr_copy.aux_questionaries ADD COLUMN verify_data VARCHAR(1000) NULL COMMENT 'JSON: введённые данные и результат сверки по полям';

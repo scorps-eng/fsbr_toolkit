@@ -418,6 +418,37 @@ pre.ab-sql{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;font-
     <?= $A['result_player_id'] ? ', ID ' . (int)$A['result_player_id'] : '' ?> <?= h($A['op_note'] ?? '') ?><?php endif; ?>
 </div>
 
+<?php if ($A['type'] === 'e'): ?>
+<?php
+    $vd = isset($A['verify_data']) && $A['verify_data'] !== null ? json_decode((string)$A['verify_data'], true) : null;
+    $stored = is_array($vd) ? ($vd['detail'] ?? []) : [];
+    $entered = is_array($vd) ? ($vd['entered'] ?? []) : [];
+    // что есть в базе сейчас: дата рождения — players; телефон, e-mail — последняя анкета (questionaries)
+    $onFile = ['birthdate' => (string)($prev['birthdate'] ?? ''), 'phone4' => (string)($prev['phone'] ?? ''), 'mail' => (string)($prev['mail'] ?? '')];
+    $resLbl = ['match' => ['совпало', 'ab-ok'], 'mismatch' => ['НЕ совпало', 'ab-bad'], 'nodata' => ['в базе нет данных', 'ab-warn'], 'empty' => ['не введено', 'ab-warn']];
+    $byField = [];
+    foreach ($stored as $d) {
+        $byField[$d['field']] = $d;
+    }
+?>
+<div class="ab-card">
+  <b>Подтверждение личности (данные, введённые при обновлении)</b>
+  <table class="ab-table" style="margin-top:8px">
+    <tr><th>Поле</th><th>Ввёл человек</th><th>В базе сейчас</th><th>Результат</th></tr>
+    <?php foreach (['birthdate' => 'Дата рождения', 'phone4' => 'Телефон (последние 4 цифры)', 'mail' => 'E-mail из прошлой анкеты'] as $fk => $fl): ?>
+    <?php $d = $byField[$fk] ?? null; ?>
+    <tr>
+      <td><?= h($fl) ?></td>
+      <td><?= $d ? h((string)$d['entered']) : '<span style="color:var(--muted)">не сохранено</span>' ?></td>
+      <td><?= h($onFile[$fk]) ?></td>
+      <td><?php if ($d): $rl = $resLbl[$d['result']] ?? [$d['result'], '']; ?><span class="<?= $rl[1] ?>"><?= h($rl[0]) ?></span><?php else: ?>—<?php endif; ?></td>
+    </tr>
+    <?php endforeach; ?>
+  </table>
+  <?php if (!$stored): ?><p class="note" style="color:var(--muted)">Подробности этой анкеты не сохранены (нужна колонка verify_data — раздел 7 в db_setup.sql; для новых анкет она заполняется).</p><?php endif; ?>
+</div>
+<?php endif; ?>
+
 <?php if (!$done && $A['type'] === 'a'): ?>
 <div class="ab-card">
   <b>Кто это? Возможные совпадения</b>
@@ -452,7 +483,7 @@ pre.ab-sql{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;font-
 <?php if ($A['type'] === 'a' && !empty($_POST['new_id'])): ?><input type="hidden" name="new_id" value="1"><?php endif; ?>
 <div class="ab-card">
 <table class="ab-table">
-  <tr><th>Поле</th><th>Заполненная анкета</th><th><?= $prevSrc !== '' ? h($prevSrc) : 'Предыдущая анкета' ?></th><th>Новая (в базу)</th></tr>
+  <tr><th>Поле</th><th>Заполненная анкета</th><th>Актуальные данные</th><th>Новая (в базу)</th></tr>
   <?php foreach (ANKETA_FIELDS as $f): ?>
   <?php $chg = $targetPid !== null && in_array($f, $changedNow, true); ?>
   <tr>

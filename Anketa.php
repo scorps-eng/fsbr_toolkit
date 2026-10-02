@@ -364,3 +364,38 @@ function anketa_not_cp1251(string $s): bool
     $c = @mb_convert_encoding($s, 'CP1251', 'UTF-8');
     return $c === false || @mb_convert_encoding($c, 'UTF-8', 'CP1251') !== $s;
 }
+
+/**
+ * Подробная сверка личности по полям.
+ * @return array<int,array{field:string,label:string,entered:string,result:string}> result: match|mismatch|nodata|empty
+ */
+function anketa_verify_detail(array $prev, array $given): array
+{
+    $out = [];
+    // дата рождения
+    $pb = anketa_norm('birthdate', $prev['birthdate'] ?? '');
+    $gb = anketa_norm('birthdate', $given['birthdate'] ?? '');
+    $out[] = ['field' => 'birthdate', 'label' => 'Дата рождения', 'entered' => $gb,
+        'result' => $pb === '' ? 'nodata' : ($gb === '' ? 'empty' : ($gb === $pb ? 'match' : 'mismatch'))];
+    // телефон: последние 4 цифры любого номера
+    $pp = anketa_norm('phone', $prev['phone'] ?? '');
+    $g4 = preg_replace('/\D+/', '', (string)($given['phone4'] ?? ''));
+    $g4 = $g4 === null ? '' : substr($g4, -4);
+    $res = 'nodata';
+    if ($pp !== '') {
+        $res = strlen($g4) < 4 ? 'empty' : 'mismatch';
+        foreach (explode(',', $pp) as $num) {
+            if (strlen($g4) === 4 && strlen($num) >= 4 && substr($num, -4) === $g4) {
+                $res = 'match';
+                break;
+            }
+        }
+    }
+    $out[] = ['field' => 'phone4', 'label' => 'Телефон (последние 4 цифры)', 'entered' => $g4, 'result' => $res];
+    // e-mail
+    $pm = anketa_norm('mail', $prev['mail'] ?? '');
+    $gm = anketa_split_mails((string)($given['mail'] ?? ''));
+    $out[] = ['field' => 'mail', 'label' => 'E-mail из прошлой анкеты', 'entered' => implode(', ', $gm),
+        'result' => $pm === '' ? 'nodata' : (!$gm ? 'empty' : (array_intersect($gm, explode(',', $pm)) ? 'match' : 'mismatch'))];
+    return $out;
+}
