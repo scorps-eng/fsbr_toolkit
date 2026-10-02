@@ -141,6 +141,7 @@ $clubNames = [];
 foreach ($clubRows as $c) {
     $clubNames[(int)$c['club_id']] = $c['shortname'] ?: $c['name'];
 }
+uasort($clubNames, fn($a, $b) => strcmp(str_replace('ё', 'е', mb_strtolower((string)$a)), str_replace('ё', 'е', mb_strtolower((string)$b)))); // клубы по алфавиту
 $cityByName = [];
 foreach ($cityRows as $c) {
     $cityByName[mb_strtolower(trim((string)$c['city_name']))] = (int)$c['city_id'];

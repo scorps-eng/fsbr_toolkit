@@ -610,7 +610,10 @@ if ($mysqli) {
     <label>Клуб</label>
     <select name="club_id" id="club_id">
       <option value="">— не указан —</option>
-      <?php foreach ($clubs as $cl): ?>
+      <?php
+      $clubKey = fn($c) => str_replace('ё', 'е', mb_strtolower((string)($c['shortname'] ?: $c['name'])));
+      usort($clubs, fn($a, $b) => strcmp($clubKey($a), $clubKey($b)));
+      foreach ($clubs as $cl): ?>
       <option value="<?= (int)$cl['club_id'] ?>"><?= h($cl['shortname'] ?: $cl['name']) ?></option>
       <?php endforeach; ?>
     </select>
@@ -682,6 +685,16 @@ document.getElementById('btn-check-code').addEventListener('click', function() {
       st.textContent = d.msg;
     }
   }).catch(function() { st.textContent = 'Ошибка сети'; });
+});
+// e-mail из прошлой анкеты копируем в основное поле, чтобы не вводить дважды (пока человек не менял его вручную)
+var autoMail = '';
+document.getElementById('v_mail').addEventListener('input', function() {
+  var m = document.getElementById('mail');
+  if (m.value.trim() === '' || m.value === autoMail) {
+    m.value = this.value;
+    autoMail = this.value;
+    m.dispatchEvent(new Event('input'));
+  }
 });
 document.getElementById('mail').addEventListener('input', function() {
   document.getElementById('mail-status').textContent = mailStatusText();
