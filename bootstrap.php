@@ -367,9 +367,19 @@ function app_smtp_send(array $c, string $from, string $to, string $subject, stri
     }
     $errno = 0;
     $errstr = '';
-    $fp = @stream_socket_client(($secure === 'ssl' ? 'ssl://' : 'tcp://') . $host . ':' . $port, $errno, $errstr, 15);
+    $verify = ($c['smtp_verify_peer'] ?? true) !== false; // false — если сертификат сервера не совпадает с именем хоста
+    $ctx = stream_context_create(['ssl' => ['verify_peer' => $verify, 'verify_peer_name' => $verify, 'SNI_enabled' => true, 'peer_name' => $host]]);
+    $fp = @stream_socket_client(($secure === 'ssl' ? 'ssl://' : 'tcp://') . $host . ':' . $port, $errno, $errstr, 15, STREAM_CLIENT_CONNECT, $ctx);
     if (!$fp) {
-        return "SMTP: не удалось подключиться к {$host}:{$port} ({$errstr})";
+        $hint = '';
+        if ($secure === 'ssl' && $port !== 465) {
+            $hint = " Подсказка: 'ssl' (неявный SSL) работает на порту 465; на порту {$port} задайте smtp_secure '' или 'tls'.";
+        } elseif ($secure === 'tls' && $port === 465) {
+            $hint = " Подсказка: на порту 465 задайте smtp_secure 'ssl'.";
+        } elseif ($errstr === '' ) {
+            $hint = ' Возможно, исходящий порт закрыт хостингом — попробуйте 465 (ssl) или 587 (tls).';
+        }
+        return "SMTP: не удалось подключиться к {$host}:{$port} ({$errstr})." . $hint;
     }
     stream_set_timeout($fp, 20);
     $read = function () use ($fp): array {
@@ -402,6 +412,9 @@ function app_smtp_send(array $c, string $from, string $to, string $subject, stri
             if ($e = $cmd('STARTTLS', [220])) {
                 return $e;
             }
+            @stream_context_set_option($fp, 'ssl', 'verify_peer', $verify);
+            @stream_context_set_option($fp, 'ssl', 'verify_peer_name', $verify);
+            @stream_context_set_option($fp, 'ssl', 'peer_name', $host);
             if (!@stream_socket_enable_crypto($fp, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
                 return 'SMTP: не удалось включить TLS (STARTTLS)';
             }
