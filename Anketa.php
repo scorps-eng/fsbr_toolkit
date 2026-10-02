@@ -292,6 +292,28 @@ function anketa_build_sql(array $new, array $changed, callable $esc, ?int $playe
         $L[] = 'UPDATE players SET ' . implode(', ', $set) . ' WHERE player_id = @pid;';
     }
 
+    // external_ids: обновить найденную строку или добавить, если её нет
+    $extMap = ['bbo' => 'bbo', 'gambler' => 'gambler', 'WBF' => 'wbf', 'acbl' => 'acbl'];
+    $extCols = [];
+    foreach ($extMap as $f => $col) {
+        if ($isNew ? !anketa_empty($f, $new[$f] ?? null) : in_array($f, $changed, true)) {
+            $extCols[$col] = $esc($new[$f] ?? null);
+        }
+    }
+    if ($extCols && !empty($ctx['ext_lu'])) {
+        $extCols['lastupdated'] = 'NOW()';
+    }
+    if ($extCols) {
+        $set = [];
+        foreach ($extCols as $c => $v) {
+            $set[] = "{$c} = {$v}";
+        }
+        $L[] = 'UPDATE external_ids SET ' . implode(', ', $set) . ' WHERE player_id = @pid;';
+        $L[] = 'INSERT INTO external_ids (player_id, ' . implode(', ', array_keys($extCols)) . ')';
+        $L[] = 'SELECT @pid, ' . implode(', ', array_values($extCols))
+            . ' FROM (SELECT 1) t WHERE NOT EXISTS (SELECT 1 FROM external_ids WHERE player_id = @pid);';
+    }
+
     // students
     $stuMap = ['is_sputnik' => ['sputnik', $int], 'is_sirius' => ['sirius', $int], 'first_tourn' => ['first', fn($v) => $esc($v)]];
     $stuCols = [];
