@@ -345,6 +345,12 @@ function mail_address_ok(string $a): bool
  * Отправка письма. config: mail_from (обязателен для mail()), mail_transport = 'mail' (по умолчанию) | 'file'
  * ('file' — не отправлять, а писать в data/mail_outbox.json.php; для проверки на сервере без почты).
  */
+/** Запомнить причину сбоя отправки (видна оператору на вкладке «Анкеты»). */
+function mail_note_error(?string $msg): void
+{
+    $f = app_data_dir() . '/mail_error.json.php';
+    data_write_json($f, $msg === null ? [] : ['t' => date('c'), 'msg' => $msg]);
+}
 function app_send_mail(string $to, string $subject, string $body): bool
 {
     if (!mail_address_ok($to)) {
@@ -353,7 +359,7 @@ function app_send_mail(string $to, string $subject, string $body): bool
     $c = app_config();
     $from = (string)($c['mail_from'] ?? '');
     if ($from === '' || !mail_address_ok($from)) {
-        error_log('FSBR toolkit: mail_from не задан или некорректен в config.php');
+        mail_note_error('В config.php не задан (или некорректен) mail_from — письма не отправляются.');
         return false;
     }
     if (($c['mail_transport'] ?? 'mail') === 'file') {
@@ -362,9 +368,23 @@ function app_send_mail(string $to, string $subject, string $body): bool
         data_write_json(app_data_dir() . '/mail_outbox.json.php', array_slice($box, -50));
         return true;
     }
+    if (!function_exists('mail')) {
+        mail_note_error('Функция mail() отключена на хостинге (disable_functions).');
+        return false;
+    }
     $subj = '=?UTF-8?B?' . base64_encode(str_replace(["\r", "\n"], ' ', $subject)) . '?=';
     $headers = "From: {$from}\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\nX-Mailer: FSBR-Toolkit";
-    return @mail($to, $subj, $body, $headers);
+    $ok = @mail($to, $subj, $body, $headers, '-f' . $from);
+    if (!$ok) {
+        $ok = @mail($to, $subj, $body, $headers); // часть хостингов не принимает параметр -f
+    }
+    if (!$ok) {
+        $e = error_get_last();
+        mail_note_error('mail() вернула false: ' . ($e['message'] ?? 'на сервере не настроена отправка (sendmail/SMTP), либо адрес mail_from не принадлежит домену сайта.'));
+    } else {
+        mail_note_error(null);
+    }
+    return $ok;
 }
 
 const LOGIN_MAX_FAILS = 5;

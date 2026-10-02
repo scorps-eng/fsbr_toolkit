@@ -80,6 +80,10 @@ function ab_fmt(string $f, $v, array $cities, array $clubs): string
     return (string)$v;
 }
 
+$mailErr = data_read_json(app_data_dir() . '/mail_error.json.php');
+if (!empty($mailErr['msg'])) {
+    echo '<div class="card" style="color:var(--warn)">Последний сбой отправки писем (' . h($mailErr['t'] ?? '') . '): ' . h($mailErr['msg']) . '</div>';
+}
 $aux_error = null;
 $aux_info = null;
 $aux_sqlPreview = null;

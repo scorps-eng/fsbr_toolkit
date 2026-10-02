@@ -71,6 +71,9 @@ if (isset($_GET['ajax']) && in_array($_GET['ajax'], ['send_code', 'check_code'],
         unset($_SESSION['mail_verified']);
         $okSend = app_send_mail($mailIn, 'Код подтверждения анкеты ФСБР',
             "Ваш код подтверждения e-mail: {$code}\nКод действует 15 минут.\nЕсли вы не заполняли анкету ФСБР — просто проигнорируйте письмо.\n");
+        if (!$okSend) {
+            $_SESSION['mail_code']['sent'] = 0; // неудачная отправка не должна включать паузу
+        }
         $reply($okSend, $okSend ? 'Код отправлен на ' . $mailIn : 'Не удалось отправить письмо. Сообщите организаторам');
     }
     // check_code
