@@ -396,10 +396,12 @@ if ($mysqli) {
     label { display:block; margin: 18px 0 4px; font-size: .95rem; color: var(--text); }
     label .req, .req { color: var(--err); }
     input[type=text], input[type=email], input[type=tel], input[type=date], input[type=number], select, textarea {
-      width: 100%; padding: 8px 2px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0;
-      background: transparent; color: var(--text); font-size: 1rem; font-family: inherit;
+      width: 100%; padding: 10px 12px; border: 1px solid #8a8f98; border-radius: 6px;
+      background: #f1f3f9; color: var(--text); font-size: 1rem; font-family: inherit;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,.08);
     }
-    input:focus, select:focus, textarea:focus { outline: 0; border-bottom: 2px solid var(--accent); padding-bottom: 7px; }
+    input:hover, select:hover, textarea:hover { border-color: #5f6368; }
+    input:focus, select:focus, textarea:focus { outline: 0; border-color: var(--accent); background: #fff; box-shadow: 0 0 0 2px rgba(103,58,183,.25); }
     input[type=checkbox], input[type=radio] { accent-color: var(--accent); width:18px; height:18px; }
     .modes { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
     .modes label { display:flex; align-items:center; gap:10px; margin:0; padding:6px 0; cursor:pointer; color:var(--text); }
@@ -415,7 +417,7 @@ if ($mysqli) {
     #search-results li:hover { background:#f3effa; }
     .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 20px; }
     @media (max-width:560px) { .grid2 { grid-template-columns:1fr; } .card { padding:18px 16px; } }
-    .consent { font-size:.85rem; color:var(--text); max-height:260px; overflow:auto; border:1px solid var(--line); padding:12px; border-radius:8px; margin-top:8px; background:#fafafa; }
+    .consent { font-size:.85rem; color:var(--text); border:1px solid var(--line); padding:12px; border-radius:8px; margin-top:8px; background:#fafafa; }
     .section-title { font-size:1.15rem; margin:0 0 4px; color:var(--text); font-weight:500; }
     .footer-note { color:var(--muted); font-size:.75rem; text-align:center; margin-top:16px; }
   </style>
