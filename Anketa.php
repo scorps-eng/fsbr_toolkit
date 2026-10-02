@@ -350,7 +350,8 @@ function anketa_build_sql(array $new, array $changed, callable $esc, ?int $playe
         }
     }
     $L[] = 'INSERT INTO questionaries (player_id, type, timestamp, ' . implode(', ', ANKETA_FIELDS) . ')';
-    $L[] = 'VALUES (@pid, ' . $esc($isNew ? 'a' : 'e') . ', NOW(), ' . implode(', ', $qv) . ');';
+    $L[] = 'VALUES (@pid, ' . $esc($isNew ? 'a' : 'e') . ', '
+        . (!empty($ctx['submitted_at']) ? $esc((string)$ctx['submitted_at']) : 'NOW()') . ', ' . implode(', ', $qv) . ');';
 
     $L[] = 'UPDATE aux_questionaries SET status = ' . $esc('accepted') . ', processed_at = NOW(), processed_by = '
         . $esc($ctx['user']) . ', result_player_id = @pid WHERE id = ' . (int)$ctx['aux_id'] . ' AND status IS NULL;';

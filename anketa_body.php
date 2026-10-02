@@ -272,6 +272,7 @@ if ($post && $A && $act === 'build') {
             $sql = anketa_build_sql($newForm, $changed, $esc, $targetPid, [
                 'aux_id' => $aid, 'type' => $A['type'], 'user' => (string)(app_config()['auth_user'] ?? ''),
                 'city_id' => $cityId, 'birth_col' => $birthCol,
+                'submitted_at' => (string)$A['timestamp'], // время заполнения анкеты
                 'players_lu' => isset($plCols['lastupdated']),
                 'ext_lu' => isset($extColsDb['lastupdated']),
             ]);
