@@ -143,7 +143,7 @@ foreach ($clubRows as $c) {
 }
 $clubKeyFn = function ($n) {
     $n = str_replace('ё', 'е', mb_strtolower((string)$n));
-    return (preg_match('/^[а-я]/u', $n) ? '0' : '1') . $n;   // кириллица первой, латиница — в конец
+    return (preg_match('/^[^\p{L}]*[а-я]/u', $n) ? '0' : '1') . $n;   // по первой букве: кириллица первой, латиница — в конец
 };
 uasort($clubNames, fn($a, $b) => strcmp($clubKeyFn($a), $clubKeyFn($b)));
 $cityByName = [];

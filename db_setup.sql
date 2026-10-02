@@ -69,3 +69,8 @@ ALTER TABLE fsbr_copy.aux_questionaries
 
 -- 7. Подробный отчёт о подтверждении личности (что ввёл человек и результат по полям)
 ALTER TABLE fsbr_copy.aux_questionaries ADD COLUMN verify_data VARCHAR(1000) NULL COMMENT 'JSON: введённые данные и результат сверки по полям';
+
+-- 8. Вкладка «Справочники»: правка городов, клубов, игроков и шапок турниров (players и tourn_header уже выданы выше)
+GRANT SELECT, INSERT, UPDATE ON fsbr_copy.cities TO 'fsbr_tk_rw'@'%';
+GRANT SELECT, INSERT, UPDATE ON fsbr_copy.clubs  TO 'fsbr_tk_rw'@'%';
+-- tourn_header: UPDATE уже есть. Удаление строк в интерфейсе не предусмотрено.

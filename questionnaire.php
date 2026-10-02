@@ -614,7 +614,8 @@ if ($mysqli) {
       // кириллица первой, латиница (и прочее) — в конец списка
       $clubKey = function ($c) {
           $n = str_replace('ё', 'е', mb_strtolower((string)($c['shortname'] ?: $c['name'])));
-          return (preg_match('/^[а-я]/u', $n) ? '0' : '1') . $n;
+          // группа определяется по первой БУКВЕ (цифры в начале не в счёт): «6 пик» — к кириллице
+          return (preg_match('/^[^\p{L}]*[а-я]/u', $n) ? '0' : '1') . $n;
       };
       usort($clubs, fn($a, $b) => strcmp($clubKey($a), $clubKey($b)));
       foreach ($clubs as $cl): ?>
