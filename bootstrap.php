@@ -307,6 +307,66 @@ function client_ip(): string
     return (string)($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0');
 }
 
+/**
+ * Простой ограничитель частоты по ключу (файл data/throttle.json.php). true — лимит исчерпан, действие нужно отклонить.
+ * Вызов считается попыткой: учитывается сразу.
+ */
+function throttle_hit(string $key, int $max, int $windowSec): bool
+{
+    $file = app_data_dir() . '/throttle.json.php';
+    $now = time();
+    $data = data_read_json($file);
+    // чистим устаревшее
+    foreach ($data as $k => $list) {
+        $data[$k] = array_values(array_filter((array)$list, fn($t) => is_int($t) && $t > $now - 86400));
+        if (!$data[$k]) {
+            unset($data[$k]);
+        }
+    }
+    $list = array_values(array_filter($data[$key] ?? [], fn($t) => $t > $now - $windowSec));
+    if (count($list) >= $max) {
+        $data[$key] = $list;
+        data_write_json($file, $data);
+        return true;
+    }
+    $list[] = $now;
+    $data[$key] = $list;
+    data_write_json($file, $data);
+    return false;
+}
+
+/** Корректный адрес e-mail без переводов строк (защита от инъекции заголовков). */
+function mail_address_ok(string $a): bool
+{
+    return strlen($a) <= 80 && !preg_match('/[\r\n,;<>\s]/', $a) && filter_var($a, FILTER_VALIDATE_EMAIL) !== false;
+}
+
+/**
+ * Отправка письма. config: mail_from (обязателен для mail()), mail_transport = 'mail' (по умолчанию) | 'file'
+ * ('file' — не отправлять, а писать в data/mail_outbox.json.php; для проверки на сервере без почты).
+ */
+function app_send_mail(string $to, string $subject, string $body): bool
+{
+    if (!mail_address_ok($to)) {
+        return false;
+    }
+    $c = app_config();
+    $from = (string)($c['mail_from'] ?? '');
+    if ($from === '' || !mail_address_ok($from)) {
+        error_log('FSBR toolkit: mail_from не задан или некорректен в config.php');
+        return false;
+    }
+    if (($c['mail_transport'] ?? 'mail') === 'file') {
+        $box = data_read_json(app_data_dir() . '/mail_outbox.json.php');
+        $box[] = ['t' => date('c'), 'to' => $to, 'subject' => $subject, 'body' => $body];
+        data_write_json(app_data_dir() . '/mail_outbox.json.php', array_slice($box, -50));
+        return true;
+    }
+    $subj = '=?UTF-8?B?' . base64_encode(str_replace(["\r", "\n"], ' ', $subject)) . '?=';
+    $headers = "From: {$from}\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\nX-Mailer: FSBR-Toolkit";
+    return @mail($to, $subj, $body, $headers);
+}
+
 const LOGIN_MAX_FAILS = 5;
 const LOGIN_LOCK_SECONDS = 900;
 

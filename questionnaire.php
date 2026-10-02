@@ -29,12 +29,66 @@ declare(strict_types=1);
  * ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
  */
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/Anketa.php';
 app_session_start();
 csrf_enforce(); // публичная форма, но POST только с токеном
 
 
 function db(): ?mysqli {
     return db_questionnaire(); // отдельная учётка: INSERT только в aux_questionaries
+}
+
+// --- AJAX: подтверждение e-mail кодом (без БД) ---
+if (isset($_GET['ajax']) && in_array($_GET['ajax'], ['send_code', 'check_code'], true)) {
+    header('Content-Type: application/json; charset=utf-8');
+    $reply = function (bool $ok, string $msg) {
+        echo json_encode(['ok' => $ok, 'msg' => $msg], JSON_UNESCAPED_UNICODE);
+        exit;
+    };
+    if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+        $reply(false, 'Неверный запрос');
+    }
+    $mailIn = mb_strtolower(trim((string)($_POST['mail'] ?? '')));
+    if (!mail_address_ok($mailIn)) {
+        $reply(false, 'Укажите корректный e-mail');
+    }
+    if ($_GET['ajax'] === 'send_code') {
+        $last = (int)($_SESSION['mail_code']['sent'] ?? 0);
+        if (time() - $last < 60) {
+            $reply(false, 'Повторная отправка возможна через минуту');
+        }
+        if (throttle_hit('mailcode_ip_' . client_ip(), 10, 3600) || throttle_hit('mailcode_to_' . $mailIn, 3, 3600)) {
+            $reply(false, 'Слишком много запросов. Попробуйте позже');
+        }
+        $code = (string)random_int(100000, 999999);
+        $_SESSION['mail_code'] = [
+            'mail' => $mailIn,
+            'hash' => hash_hmac('sha256', $code, session_id()),
+            'exp' => time() + 900,
+            'tries' => 0,
+            'sent' => time(),
+        ];
+        unset($_SESSION['mail_verified']);
+        $okSend = app_send_mail($mailIn, 'Код подтверждения анкеты ФСБР',
+            "Ваш код подтверждения e-mail: {$code}\nКод действует 15 минут.\nЕсли вы не заполняли анкету ФСБР — просто проигнорируйте письмо.\n");
+        $reply($okSend, $okSend ? 'Код отправлен на ' . $mailIn : 'Не удалось отправить письмо. Сообщите организаторам');
+    }
+    // check_code
+    $mc = $_SESSION['mail_code'] ?? null;
+    if (!$mc || $mc['mail'] !== $mailIn || $mc['exp'] < time()) {
+        $reply(false, 'Код не запрашивался или устарел — запросите новый');
+    }
+    if ((int)$mc['tries'] >= 5) {
+        $reply(false, 'Слишком много попыток — запросите новый код');
+    }
+    $_SESSION['mail_code']['tries'] = (int)$mc['tries'] + 1;
+    $given = preg_replace('/\D+/', '', (string)($_POST['code'] ?? ''));
+    if (hash_equals((string)$mc['hash'], hash_hmac('sha256', (string)$given, session_id()))) {
+        $_SESSION['mail_verified'] = $mailIn;
+        unset($_SESSION['mail_code']);
+        $reply(true, 'E-mail подтверждён');
+    }
+    $reply(false, 'Неверный код');
 }
 
 // --- AJAX: поиск игроков ---
@@ -187,6 +241,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_anketa'])) {
             $playerId = (int)$_POST['player_id'];
         }
 
+        if (throttle_hit('anketa_ip_' . client_ip(), 10, 3600)) {
+            throw new RuntimeException('Слишком много анкет с вашего адреса. Попробуйте позже');
+        }
+
+        // e-mail должен быть подтверждён кодом (обязательно для нового игрока, для обновления — если указан)
+        $mailNorm = mb_strtolower($mail);
+        if ($mail !== '') {
+            if (!mail_address_ok($mail)) {
+                throw new RuntimeException('Некорректный e-mail');
+            }
+            if (($_SESSION['mail_verified'] ?? '') !== $mailNorm) {
+                throw new RuntimeException('Подтвердите e-mail кодом из письма');
+            }
+        }
+
+        // обновление: сверка введённых «для проверки» данных с предыдущей анкетой (результат пользователю не показываем)
+        $verifyStatus = null;
+        if ($mode === 'update') {
+            $prev = ['birthdate' => null, 'phone' => null, 'mail' => null];
+            $qr = $mysqli->query("SELECT birthdate, phone, mail FROM aux_questionaries
+                WHERE player_id = {$playerId} AND (status IS NULL OR status <> 'rejected')
+                ORDER BY (status = 'accepted') DESC, id DESC LIMIT 1");
+            if ($qr && ($pr = $qr->fetch_assoc())) {
+                $prev = $pr;
+            }
+            if (!$prev['phone'] || !$prev['mail']) {
+                $pq = $mysqli->query("SELECT phone, mail FROM players WHERE player_id = {$playerId} LIMIT 1");
+                if ($pq && ($pp = $pq->fetch_assoc())) {
+                    $prev['phone'] = $prev['phone'] ?: $pp['phone'];
+                    $prev['mail'] = $prev['mail'] ?: $pp['mail'];
+                }
+            }
+            $verifyStatus = anketa_verify_compare($prev, [
+                'birthdate' => trim((string)($_POST['v_birthdate'] ?? '')),
+                'phone4' => trim((string)($_POST['v_phone4'] ?? '')),
+                'mail' => trim((string)($_POST['v_mail'] ?? '')),
+            ]);
+        }
+        $emailVerified = ($mail !== '' && ($_SESSION['mail_verified'] ?? '') === $mailNorm) ? 1 : 0;
+
+        // новые колонки есть не во всех базах — пишем в них только если они созданы (db_setup.sql, п. 4)
+        $hasExtra = false;
+        if ($cr = $mysqli->query("SHOW COLUMNS FROM aux_questionaries LIKE 'verify_status'")) {
+            $hasExtra = $cr->num_rows > 0;
+        }
+
         $bbo = trim((string)($_POST['bbo'] ?? ''));
         $gambler = trim((string)($_POST['gambler'] ?? ''));
         $wbf = trim((string)($_POST['wbf'] ?? ''));
@@ -204,10 +304,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_anketa'])) {
         $esc = fn($v) => $v === null || $v === '' ? 'NULL' : ("'" . $mysqli->real_escape_string((string)$v) . "'");
         $escInt = fn($v) => ($v === null || $v === '') ? 'NULL' : (string)(int)$v;
 
+        $extraCols = $extraVals = '';
+        if ($hasExtra) {
+            $extraCols = ', email_verified, verify_status';
+            $extraVals = ', ' . $emailVerified . ', ' . ($verifyStatus === null ? 'NULL' : "'" . $mysqli->real_escape_string($verifyStatus) . "'");
+        }
         // fsbr_copy.aux_questionaries (текущая БД из config)
         $sql = "INSERT INTO aux_questionaries
             (player_id, type, timestamp, firstname, lastname, surname, birthdate, sex, city, region,
-             phone, mail, bbo, gambler, WBF, acbl, is_sputnik, is_sirius, first_tourn, club_id)
+             phone, mail, bbo, gambler, WBF, acbl, is_sputnik, is_sirius, first_tourn, club_id{$extraCols})
             VALUES (
               {$escInt($playerId)},
               '{$mysqli->real_escape_string($type)}',
@@ -228,11 +333,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_anketa'])) {
               {$isSputnik},
               {$isSirius},
               {$esc($firstSql)},
-              {$escInt($clubId)}
+              {$escInt($clubId)}{$extraVals}
             )";
         if (!$mysqli->query($sql)) {
             throw new RuntimeException('Не удалось сохранить анкету: ' . $mysqli->error);
         }
+        unset($_SESSION['mail_verified']);
         $success = true;
     } catch (Throwable $e) {
         $error = $e->getMessage();
@@ -320,6 +426,22 @@ if ($mysqli) {
       <input type="text" id="search-q" placeholder="Фамилия, имя или ID…" autocomplete="off">
       <ul id="search-results"></ul>
       <p class="note" id="selected-label"></p>
+      <div id="block-verify" style="display:none">
+        <p class="section-title">Подтверждение личности</p>
+        <p class="note">Введите данные из вашей прошлой анкеты — так мы убедимся, что вы обновляете свою карточку.</p>
+        <div class="grid2">
+          <div>
+            <label>Дата рождения</label>
+            <input type="date" name="v_birthdate" id="v_birthdate">
+          </div>
+          <div>
+            <label>Телефон: последние 4 цифры</label>
+            <input type="text" name="v_phone4" id="v_phone4" inputmode="numeric" maxlength="4" autocomplete="off">
+          </div>
+        </div>
+        <label>E-mail из прошлой анкеты</label>
+        <input type="text" name="v_mail" id="v_mail" autocomplete="off">
+      </div>
     </div>
 
     <p class="section-title">Основные данные</p>
@@ -375,6 +497,14 @@ if ($mysqli) {
 
     <label>E-mail <span class="req" data-req="new">*</span></label>
     <input type="text" name="mail" id="mail" placeholder="email@example.com" <?= $mode === 'new' ? 'required' : '' ?>>
+    <div id="mail-verify" style="margin-top:8px">
+      <button type="button" id="btn-send-code" class="btn" style="margin-top:0;width:auto;padding:8px 16px">Отправить код на e-mail</button>
+      <span id="code-box" style="display:none">
+        <input type="text" id="mail-code" inputmode="numeric" maxlength="6" placeholder="код из письма" style="width:160px;margin:8px 8px 0 0" autocomplete="off">
+        <button type="button" id="btn-check-code" class="btn" style="margin-top:0;width:auto;padding:8px 16px;display:inline-block">Подтвердить</button>
+      </span>
+      <p class="note" id="mail-status"></p>
+    </div>
 
     <p class="section-title">Дополнительно <?= $mode === 'update' ? '(новые данные — по желанию)' : '' ?></p>
 
@@ -434,8 +564,60 @@ if ($mysqli) {
   </form>
 </div>
 <script>
+var mailVerified = '';
+function postJson(url, data) {
+  var fd = new FormData();
+  var tok = document.querySelector('#anketa-form input[name=csrf]');
+  if (tok) fd.append('csrf', tok.value);
+  Object.keys(data).forEach(function(k) { fd.append(k, data[k]); });
+  return fetch(url, {method: 'POST', body: fd, credentials: 'same-origin'}).then(function(r) { return r.json(); });
+}
+function mailNow() { return document.getElementById('mail').value.trim().toLowerCase(); }
+document.getElementById('btn-send-code').addEventListener('click', function() {
+  var st = document.getElementById('mail-status');
+  st.textContent = 'Отправляем…';
+  postJson('?ajax=send_code', {mail: mailNow()}).then(function(d) {
+    st.textContent = d.msg;
+    if (d.ok) document.getElementById('code-box').style.display = 'inline';
+  }).catch(function() { st.textContent = 'Ошибка сети'; });
+});
+document.getElementById('btn-check-code').addEventListener('click', function() {
+  var st = document.getElementById('mail-status');
+  postJson('?ajax=check_code', {mail: mailNow(), code: document.getElementById('mail-code').value}).then(function(d) {
+    st.textContent = d.msg;
+    if (d.ok) { mailVerified = mailNow(); document.getElementById('code-box').style.display = 'none'; }
+  }).catch(function() { st.textContent = 'Ошибка сети'; });
+});
+document.getElementById('mail').addEventListener('input', function() {
+  if (mailNow() !== mailVerified) {
+    mailVerified = '';
+    document.getElementById('mail-status').textContent = '';
+  }
+});
+// исходные значения выбранного игрока: при отправке «не изменено» не передаём (в анкете остаются только явные правки)
+var origValues = {};
+document.getElementById('anketa-form').addEventListener('submit', function(e) {
+  var mode = document.querySelector('input[name=mode]:checked').value;
+  var m = mailNow();
+  if (m !== '' && m !== mailVerified) {
+    e.preventDefault();
+    document.getElementById('mail-status').textContent = 'Подтвердите e-mail кодом из письма';
+    return;
+  }
+  if (mode === 'update') {
+    ['sex','city','region','bbo','gambler','wbf','acbl','first_tourn','club_id'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el && origValues[id] !== undefined && el.value === origValues[id]) el.value = '';
+    });
+    ['is_sputnik','is_sirius'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el && origValues[id] !== undefined && el.checked === origValues[id]) el.checked = false;
+    });
+  }
+});
 function setMode(mode) {
   document.getElementById('block-search').style.display = mode === 'update' ? '' : 'none';
+  document.getElementById('block-verify').style.display = mode === 'update' ? '' : 'none';
   document.querySelectorAll('[data-req="new"]').forEach(function(el) {
     el.style.display = mode === 'new' ? '' : 'none';
   });
@@ -501,6 +683,11 @@ function fillPlayer(p) {
   document.getElementById('first_tourn').value = p.first_tourn || '';
   document.getElementById('club_id').value = p.club_id || '';
   document.getElementById('region').value = ''; // в карточке нет региона — оставляем пустым для ввода
+  ['sex','city','region','bbo','gambler','wbf','acbl','first_tourn','club_id'].forEach(function(id) {
+    origValues[id] = document.getElementById(id).value;
+  });
+  origValues.is_sputnik = document.getElementById('is_sputnik').checked;
+  origValues.is_sirius = document.getElementById('is_sirius').checked;
   document.getElementById('search-results').style.display = 'none';
   document.getElementById('search-q').value = p.label;
 }

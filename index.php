@@ -13,7 +13,7 @@ auth_require();   // без входа дальше не идём
 csrf_enforce();   // все POST — только с верным CSRF-токеном
 
 $tab = $_GET['tab'] ?? $_POST['tab'] ?? 'check';
-if (!in_array($tab, ['check', 'rating', 'sql', 'history'], true)) {
+if (!in_array($tab, ['check', 'rating', 'sql', 'history', 'anketa'], true)) {
     $tab = 'check';
 }
 
@@ -41,6 +41,7 @@ function toolkit_nav(string $active): void {
         'rating' => '2. Расчёт РО / ПБ / МБ',
         'sql' => '3. SQL',
         'history' => 'История',
+        'anketa' => 'Анкеты',
     ];
     echo '<nav class="tabs">';
     foreach ($tabs as $id => $label) {
@@ -89,6 +90,8 @@ if ($tab === 'check') {
     require __DIR__ . '/sql_body.php';
 } elseif ($tab === 'history') {
     require __DIR__ . '/history_body.php';
+} elseif ($tab === 'anketa') {
+    require __DIR__ . '/anketa_body.php';
 }
 ?>
 </div>
