@@ -384,52 +384,72 @@ if ($mysqli) {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Анкета игрока ФСБР</title>
   <style>
-    :root { --bg:#0f172a; --card:#1e293b; --text:#e2e8f0; --muted:#94a3b8; --accent:#38bdf8; --ok:#22c55e; --err:#ef4444; }
+    :root { --bg:#f0ebf8; --card:#ffffff; --text:#202124; --muted:#5f6368; --accent:#673ab7; --line:#dadce0; --ok:#188038; --err:#d93025; }
     * { box-sizing: border-box; }
-    body { margin:0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); line-height:1.45; }
-    .wrap { max-width: 640px; margin: 0 auto; padding: 24px 16px 48px; }
-    h1 { font-size: 1.4rem; margin: 0 0 8px; }
-    .sub { color: var(--muted); margin-bottom: 20px; font-size: .95rem; }
-    .card { background: var(--card); border-radius: 14px; padding: 22px; margin-bottom: 16px; }
-    label { display:block; margin: 12px 0 4px; font-size: .9rem; color: var(--muted); }
-    label .req { color: #f87171; }
+    body { margin:0; font-family: Roboto, "Segoe UI", Arial, sans-serif; background: var(--bg); color: var(--text); line-height:1.5; font-size:15px; }
+    .wrap { max-width: 640px; margin: 0 auto; padding: 12px 12px 48px; }
+    h1 { font-size: 1.9rem; font-weight:400; margin: 0 0 10px; }
+    .sub { color: var(--text); margin: 0; font-size: .95rem; }
+    .card { background: var(--card); border:1px solid var(--line); border-radius: 8px; padding: 22px 24px; margin-bottom: 12px; }
+    .card.title-card { border-top: 10px solid var(--accent); padding-top: 18px; }
+    form.gform { background:none; border:0; padding:0; margin:0; }
+    label { display:block; margin: 18px 0 4px; font-size: .95rem; color: var(--text); }
+    label .req, .req { color: var(--err); }
     input[type=text], input[type=email], input[type=tel], input[type=date], input[type=number], select, textarea {
-      width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #334155;
-      background: #0f172a; color: var(--text); font-size: 1rem;
+      width: 100%; padding: 8px 2px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0;
+      background: transparent; color: var(--text); font-size: 1rem; font-family: inherit;
     }
-    .modes { display: flex; gap: 10px; margin-bottom: 16px; }
-    .modes label { display:flex; align-items:center; gap:8px; margin:0; padding:10px 14px; background:#0f172a; border-radius:8px; cursor:pointer; color:var(--text); border:1px solid #334155; }
-    .modes input { accent-color: var(--accent); }
-    .btn { display:block; width:100%; margin-top:18px; background:var(--accent); color:#0f172a; border:0; padding:12px; border-radius:8px; font-size:1rem; font-weight:600; cursor:pointer; }
-    .btn:hover { filter: brightness(1.08); }
-    .flash { background: rgba(239,68,68,.15); color:#fca5a5; padding:12px; border-radius:8px; margin-bottom:14px; }
-    .ok { background: rgba(34,197,94,.15); color:#86efac; padding:12px; border-radius:8px; margin-bottom:14px; }
-    .note { font-size:.85rem; color:var(--muted); margin-top:8px; }
-    .warn-box { background: rgba(251,191,36,.12); color:#fde68a; padding:12px; border-radius:8px; margin-bottom:14px; font-size:.9rem; }
-    #search-results { list-style:none; margin:8px 0 0; padding:0; max-height:220px; overflow:auto; border:1px solid #334155; border-radius:8px; display:none; }
-    #search-results li { padding:10px 12px; cursor:pointer; border-bottom:1px solid #334155; }
-    #search-results li:hover { background:#334155; }
-    .readonly-block { opacity: .95; }
-    .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 12px; }
-    @media (max-width:560px) { .grid2 { grid-template-columns:1fr; } }
-    .consent { font-size:.8rem; color:var(--muted); max-height:260px; overflow:auto; border:1px solid #334155; padding:10px; border-radius:8px; margin-top:8px; }
-    .section-title { font-size:1.05rem; margin:20px 0 0; color:var(--accent); }
+    input:focus, select:focus, textarea:focus { outline: 0; border-bottom: 2px solid var(--accent); padding-bottom: 7px; }
+    input[type=checkbox], input[type=radio] { accent-color: var(--accent); width:18px; height:18px; }
+    .modes { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+    .modes label { display:flex; align-items:center; gap:10px; margin:0; padding:6px 0; cursor:pointer; color:var(--text); }
+    .btn { display:inline-block; width:auto; margin-top:0; background:var(--accent); color:#fff; border:0; padding:10px 24px; border-radius:4px; font-size:.95rem; font-weight:500; cursor:pointer; font-family:inherit; text-decoration:none; }
+    .btn:hover { filter: brightness(1.08); box-shadow:0 1px 3px rgba(0,0,0,.3); }
+    .btn.secondary, #btn-send-code, #btn-check-code { background:#fff; color:var(--accent); border:1px solid var(--line); }
+    .flash { background: #fce8e6; color:#a50e0e; border:1px solid #f4c7c3; padding:12px 16px; border-radius:8px; margin-bottom:12px; }
+    .ok { background: #e6f4ea; color:#137333; padding:12px; border-radius:8px; margin-bottom:14px; }
+    .note { font-size:.8rem; color:var(--muted); margin:4px 0 0; }
+    .warn-box { background: #fff; border:1px solid var(--line); border-left:4px solid #f9ab00; color:var(--text); padding:12px 16px; border-radius:8px; margin-bottom:12px; font-size:.9rem; }
+    #search-results { list-style:none; margin:8px 0 0; padding:0; max-height:220px; overflow:auto; border:1px solid var(--line); border-radius:8px; display:none; background:#fff; }
+    #search-results li { padding:10px 12px; cursor:pointer; border-bottom:1px solid var(--line); }
+    #search-results li:hover { background:#f3effa; }
+    .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 20px; }
+    @media (max-width:560px) { .grid2 { grid-template-columns:1fr; } .card { padding:18px 16px; } }
+    .consent { font-size:.85rem; color:var(--text); max-height:260px; overflow:auto; border:1px solid var(--line); padding:12px; border-radius:8px; margin-top:8px; background:#fafafa; }
+    .section-title { font-size:1.15rem; margin:0 0 4px; color:var(--text); font-weight:500; }
+    .footer-note { color:var(--muted); font-size:.75rem; text-align:center; margin-top:16px; }
   </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>Анкета игрока ФСБР</h1>
-  <p class="sub">Федерация спортивного бриджа России. Информация из анкеты появится на сайте в начале следующего месяца.</p>
+  <?php
+    // логотип: свой файл logo.png/.jpg/.svg рядом с questionnaire.php, иначе — картинка заголовка из Google-формы
+    $logoSrc = 'https://lh6.googleusercontent.com/zPAalcF_88Vlp02_agJ2gjQtOnDL7Z8qhwiFOLHnn57OfXsF2I2lsWHyqLsqBmjmMcPV4ZlyXcB2sks=w1200-h630-p';
+    foreach (['logo.png', 'logo.jpg', 'logo.svg'] as $lf) {
+        if (is_file(__DIR__ . '/' . $lf)) {
+            $logoSrc = $lf;
+            break;
+        }
+    }
+  ?>
+  <div class="card title-card" style="padding:0;overflow:hidden">
+    <img src="<?= h($logoSrc) ?>" alt="ФСБР" referrerpolicy="no-referrer" style="display:block;width:100%;max-height:200px;object-fit:cover">
+    <div style="padding:18px 24px 22px">
+    <h1>Анкета игрока ФСБР</h1>
+    <p class="sub">Федерация спортивного бриджа России. Информация из анкеты появится на сайте в начале следующего месяца.</p>
+    <p class="note" style="margin-top:12px"><span class="req">*</span> Обязательные поля</p>
+    </div>
+  </div>
 
   <?php if ($success): ?>
   <div class="card" style="text-align:center;padding:36px 24px">
     <div style="font-size:2.5rem;margin-bottom:12px">✓</div>
-    <h2 style="margin:0 0 12px;font-size:1.35rem;color:#86efac">Данные успешно внесены</h2>
+    <h2 style="margin:0 0 12px;font-size:1.35rem;font-weight:500;color:var(--ok)">Данные успешно внесены</h2>
     <p style="color:var(--muted);margin:0 0 8px;line-height:1.5">
       Информация на сайте обновится в течение месяца.
     </p>
-    <p style="color:var(--text);font-size:1.1rem;margin:16px 0 24px">Спасибо!</p>
-    <a class="btn" href="questionnaire.php" style="text-decoration:none;display:inline-block;width:auto;padding:12px 28px">Отправить ещё одну анкету</a>
+    <p style="font-size:1.1rem;margin:16px 0 24px">Спасибо!</p>
+    <a class="btn" href="questionnaire.php">Отправить ещё одну анкету</a>
   </div>
   <?php else: ?>
 
@@ -440,7 +460,8 @@ if ($mysqli) {
     Фото на сайт: отправьте<?= $photoMail !== '' ? ' на ' . h($photoMail) : ' организаторам' ?> с указанием ID игрока.
   </div>
 
-  <form method="post" id="anketa-form" class="card"><?= csrf_field() ?>
+  <form method="post" id="anketa-form" class="gform">
+  <div class="card"><?= csrf_field() ?>
     <input type="hidden" name="submit_anketa" value="1">
     <input type="hidden" name="player_id" id="player_id" value="">
 
@@ -472,6 +493,8 @@ if ($mysqli) {
       </div>
     </div>
 
+  </div>
+  <div class="card">
     <p class="section-title">Основные данные</p>
 
     <div class="grid2">
@@ -526,15 +549,17 @@ if ($mysqli) {
     <label>E-mail <span class="req">*</span></label>
     <input type="text" name="mail" id="mail" placeholder="email@example.com" <?= $mode === 'new' ? 'required' : '' ?>>
     <div id="mail-verify" style="margin-top:8px">
-      <button type="button" id="btn-send-code" class="btn" style="margin-top:0;width:auto;padding:8px 16px">Отправить код на e-mail</button>
+      <button type="button" id="btn-send-code" class="btn" style="padding:6px 14px">Отправить код на e-mail</button>
       <span id="code-box" style="display:none">
-        <input type="text" id="mail-code" inputmode="numeric" maxlength="6" placeholder="код из письма" style="width:160px;margin:8px 8px 0 0" autocomplete="off">
-        <button type="button" id="btn-check-code" class="btn" style="margin-top:0;width:auto;padding:8px 16px;display:inline-block">Подтвердить</button>
+        <input type="text" id="mail-code" inputmode="numeric" maxlength="6" placeholder="код из письма" style="width:160px;margin:8px 8px 0 0;display:inline-block" autocomplete="off">
+        <button type="button" id="btn-check-code" class="btn" style="padding:6px 14px">Подтвердить</button>
       </span>
       <p class="note" id="mail-status"></p>
     <p class="note">Можно указать несколько адресов через запятую. Каждый подтверждается своим кодом: нажмите «Отправить код», введите его, затем повторите для следующего адреса.</p>
     </div>
 
+  </div>
+  <div class="card">
     <p class="section-title">Дополнительно <?= $mode === 'update' ? '(новые данные — по желанию)' : '' ?></p>
 
     <div class="grid2">
@@ -558,10 +583,10 @@ if ($mysqli) {
       </div>
     </div>
 
-    <label style="display:flex;align-items:center;gap:8px;color:var(--text);margin-top:12px">
+    <label style="display:flex;align-items:center;gap:10px;margin-top:14px">
       <input type="checkbox" name="is_sputnik" id="is_sputnik" value="1"> Выпускник школы «Спутник»
     </label>
-    <label style="display:flex;align-items:center;gap:8px;color:var(--text)">
+    <label style="display:flex;align-items:center;gap:10px;margin-top:6px">
       <input type="checkbox" name="is_sirius" id="is_sirius" value="1"> Сириус
     </label>
 
@@ -576,6 +601,8 @@ if ($mysqli) {
       <?php endforeach; ?>
     </select>
 
+  </div>
+  <div class="card">
     <p class="section-title">Согласие на обработку персональных данных</p>
     <div class="consent">
       <p style="margin:0 0 8px">Настоящим я даю согласие Общероссийской общественной организации «Федерации спортивного бриджа России» (далее – «ФСБР»), осуществлять с использованием средств автоматизации и/или без таковых обработку всех моих персональных данных, не ограничиваясь, но включая: фамилия, имя, отчество, регион проживания, адрес электронной почты, номер телефона, дата рождения, информация о моем участии в соревнованиях ФСБР, фотография; включая сбор, запись, систематизацию, накопление, хранение, уточнение (обновление, изменение), извлечение, использование, передачу, обезличивание, блокирование, удаление, уничтожение в целях моего участия в мероприятиях ФСБР.</p>
@@ -584,11 +611,12 @@ if ($mysqli) {
       <p style="margin:0 0 8px">Настоящее согласие дается до истечения сроков хранения соответствующей информации или документов, содержащих вышеуказанную информацию, определяемых в соответствии с законодательством Российской Федерации. Отзыв настоящего согласия может быть произведен в письменной форме путем направления мною соответствующего письменного уведомления ФСБР не менее чем за 3 (три) месяца до момента отзыва согласия.</p>
       <p style="margin:0 0 8px">Настоящим согласием я разрешаю размещение на сайте ФСБР моих персональных данных в части Фамилия, имя отчество, фотография, данные об участии в соревнованиях ФСБР и показанных результатах на соревнованиях.</p>
     </div>
-    <label style="display:flex;align-items:flex-start;gap:8px;color:var(--text);margin-top:10px">
+    <label style="display:flex;align-items:flex-start;gap:10px;margin-top:14px">
       <input type="checkbox" name="consent" value="1" required style="margin-top:4px">
       <span>Согласен(на) на обработку персональных данных <span class="req">*</span></span>
     </label>
 
+  </div>
     <button type="submit" class="btn">Отправить анкету</button>
   </form>
 </div>
