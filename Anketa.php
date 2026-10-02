@@ -244,8 +244,7 @@ function anketa_build_sql(array $new, array $changed, callable $esc, ?int $playe
     $L[] = '-- Анкета #' . $ctx['aux_id'] . ($isNew ? ' (новый игрок)' : ' (игрок ' . $playerId . ')');
     $L[] = 'START TRANSACTION;';
     if ($isNew) {
-        $L[] = "SELECT GET_LOCK('fsbr_player_id',30);";
-        $L[] = 'SET @pid = (SELECT IFNULL(MAX(player_id),0)+1 FROM players);';
+
     } else {
         $L[] = 'SET @pid = ' . (int)$playerId . ';';
     }
@@ -281,9 +280,10 @@ function anketa_build_sql(array $new, array $changed, callable $esc, ?int $playe
         $cols['lastupdated'] = 'NOW()';
     }
     if ($isNew) {
-        $cols = ['player_id' => '@pid'] + $cols;
+        // player_id — AUTO_INCREMENT: номер выдаёт сама база (без гонок)
         $L[] = 'INSERT INTO players (' . implode(', ', array_keys($cols)) . ')';
         $L[] = 'VALUES (' . implode(', ', array_values($cols)) . ');';
+        $L[] = 'SET @pid = LAST_INSERT_ID();';
     } elseif ($cols) {
         $set = [];
         foreach ($cols as $c => $v) {
@@ -334,4 +334,11 @@ function anketa_build_sql(array $new, array $changed, callable $esc, ?int $playe
         . $esc($ctx['user']) . ', result_player_id = @pid WHERE id = ' . (int)$ctx['aux_id'] . ' AND status IS NULL;';
     $L[] = 'COMMIT;';
     return implode("\n", $L) . "\n";
+}
+
+/** Есть ли в строке символы, которых нет в cp1251 (таблица players в этой кодировке). */
+function anketa_not_cp1251(string $s): bool
+{
+    $c = @mb_convert_encoding($s, 'CP1251', 'UTF-8');
+    return $c === false || @mb_convert_encoding($c, 'UTF-8', 'CP1251') !== $s;
 }

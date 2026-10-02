@@ -242,6 +242,11 @@ if ($post && $A && $act === 'build') {
         } elseif (in_array('city', $changed, true) && $cityId === null) {
             $aux_error = 'Город изменён — выберите его из справочника';
         }
+        foreach (['firstname' => 'Фамилия', 'lastname' => 'Имя', 'surname' => 'Отчество'] as $nf => $nl) {
+            if ($newForm[$nf] !== null && ($targetPid === null || in_array($nf, $changed, true)) && anketa_not_cp1251((string)$newForm[$nf])) {
+                $aux_error = "{$nl}: есть символы, которых нет в кодировке cp1251 (таблица players) — исправьте в колонке «Новая»";
+            }
+        }
         if (!$aux_error) {
             $sql = anketa_build_sql($newForm, $changed, $esc, $targetPid, [
                 'aux_id' => $aid, 'type' => $A['type'], 'user' => (string)(app_config()['auth_user'] ?? ''),
