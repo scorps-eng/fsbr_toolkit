@@ -250,6 +250,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_anketa'])) {
 
         // e-mail должен быть подтверждён кодом (обязательно для нового игрока, для обновления — если указан)
         $mailNorm = mb_strtolower($mail);
+        if ($mail === '') {
+            throw new RuntimeException('Укажите e-mail и подтвердите его кодом из письма');
+        }
         if ($mail !== '') {
             if (!mail_address_ok($mail)) {
                 throw new RuntimeException('Некорректный e-mail');
@@ -269,11 +272,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_anketa'])) {
             if ($qr && ($pr = $qr->fetch_assoc())) {
                 $prev = $pr;
             }
-            if (!$prev['phone'] || !$prev['mail']) {
-                $pq = $mysqli->query("SELECT phone, mail FROM players WHERE player_id = {$playerId} LIMIT 1");
+            if (!$prev['phone'] || !$prev['mail'] || !$prev['birthdate']) {
+                $bcol = '';
+                if ($cr = $mysqli->query('SHOW COLUMNS FROM players')) {
+                    while ($c = $cr->fetch_assoc()) {
+                        if ($bcol === '' && in_array($c['Field'], ['birthdate', 'birth_date', 'birthday', 'dob', 'bdate'], true)) {
+                            $bcol = $c['Field'];
+                        }
+                    }
+                }
+                $pq = $mysqli->query('SELECT phone, mail' . ($bcol ? ", {$bcol} AS bd" : '') . " FROM players WHERE player_id = {$playerId} LIMIT 1");
                 if ($pq && ($pp = $pq->fetch_assoc())) {
                     $prev['phone'] = $prev['phone'] ?: $pp['phone'];
                     $prev['mail'] = $prev['mail'] ?: $pp['mail'];
+                    $prev['birthdate'] = $prev['birthdate'] ?: ($pp['bd'] ?? null);
                 }
             }
             $verifyStatus = anketa_verify_compare($prev, [
@@ -498,7 +510,7 @@ if ($mysqli) {
     <input type="tel" name="phone" id="phone" placeholder="7XXXXXXXXXX" <?= $mode === 'new' ? 'required' : '' ?>>
     <p class="note">Формат 7XXXXXXXXXX (без +), можно несколько через запятую</p>
 
-    <label>E-mail <span class="req" data-req="new">*</span></label>
+    <label>E-mail <span class="req">*</span></label>
     <input type="text" name="mail" id="mail" placeholder="email@example.com" <?= $mode === 'new' ? 'required' : '' ?>>
     <div id="mail-verify" style="margin-top:8px">
       <button type="button" id="btn-send-code" class="btn" style="margin-top:0;width:auto;padding:8px 16px">Отправить код на e-mail</button>
@@ -507,6 +519,7 @@ if ($mysqli) {
         <button type="button" id="btn-check-code" class="btn" style="margin-top:0;width:auto;padding:8px 16px;display:inline-block">Подтвердить</button>
       </span>
       <p class="note" id="mail-status"></p>
+    <p class="note">E-mail нужно подтвердить кодом из письма. При обновлении можно указать прежний или новый адрес.</p>
     </div>
 
     <p class="section-title">Дополнительно <?= $mode === 'update' ? '(новые данные — по желанию)' : '' ?></p>
@@ -602,7 +615,7 @@ var origValues = {};
 document.getElementById('anketa-form').addEventListener('submit', function(e) {
   var mode = document.querySelector('input[name=mode]:checked').value;
   var m = mailNow();
-  if (m !== '' && m !== mailVerified) {
+  if (m === '' || m !== mailVerified) {
     e.preventDefault();
     document.getElementById('mail-status').textContent = 'Подтвердите e-mail кодом из письма';
     return;
@@ -630,7 +643,7 @@ function setMode(mode) {
   ['family_name','given_name','patronymic','birthdate','sex','city','region','phone','mail'].forEach(function(id) {
     var el = document.getElementById(id);
     if (!el) return;
-    if (mode === 'new') el.setAttribute('required', 'required');
+    if (mode === 'new' || id === 'mail') el.setAttribute('required', 'required');
     else el.removeAttribute('required');
   });
   if (mode === 'new') {
