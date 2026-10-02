@@ -83,6 +83,15 @@ body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);mar
 </div>
 <div class="main embed-wrap">
 <?php
+// Фатальная ошибка вкладки не должна «съедать» страницу молча: показываем причину на экране.
+register_shutdown_function(function () {
+    $e = error_get_last();
+    if ($e && in_array($e['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_RECOVERABLE_ERROR], true)) {
+        echo '<div style="background:#450a0a;color:#fecaca;padding:12px;border-radius:8px;margin:12px 0">Ошибка PHP: '
+            . htmlspecialchars($e['message'], ENT_QUOTES, 'UTF-8') . ' — ' . htmlspecialchars(basename($e['file']) . ':' . $e['line'], ENT_QUOTES, 'UTF-8') . '</div>';
+    }
+});
+try {
 if ($tab === 'check') {
     require __DIR__ . '/check_body.php';
 } elseif ($tab === 'rating') {
@@ -95,6 +104,10 @@ if ($tab === 'check') {
     require __DIR__ . '/anketa_body.php';
 } elseif ($tab === 'admin') {
     require __DIR__ . '/admin_body.php';
+}
+} catch (Throwable $e) {
+    echo '<div style="background:#450a0a;color:#fecaca;padding:12px;border-radius:8px;margin:12px 0">Ошибка: '
+        . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . ' — ' . htmlspecialchars(basename($e->getFile()) . ':' . $e->getLine(), ENT_QUOTES, 'UTF-8') . '</div>';
 }
 ?>
 </div>
