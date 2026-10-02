@@ -322,7 +322,9 @@ function anketa_build_sql(array $new, array $changed, callable $esc, ?int $playe
         } elseif (in_array($f, ['birthdate', 'first_tourn'], true)) {
             $qv[$f] = $esc(anketa_norm($f, $new[$f] ?? null) ?: null);
         } else {
-            $qv[$f] = $esc($new[$f] ?? null);
+            // questionaries в кодировке utf8 (3 байта): символы вне BMP (эмодзи) убираем, иначе вставка упадёт
+            $v = $new[$f] ?? null;
+            $qv[$f] = $esc(is_string($v) ? preg_replace('/[\x{10000}-\x{10FFFF}]/u', '', $v) : $v);
         }
     }
     $L[] = 'INSERT INTO questionaries (player_id, type, timestamp, ' . implode(', ', ANKETA_FIELDS) . ')';

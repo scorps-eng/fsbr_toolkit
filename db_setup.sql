@@ -62,3 +62,7 @@ GRANT SELECT         ON fsbr_copy.questionaries TO 'fsbr_tk_q'@'%';
 -- 6. Несколько e-mail в анкете: расширить поле (иначе длина списка ограничена 80 символами)
 ALTER TABLE fsbr_copy.aux_questionaries MODIFY mail VARCHAR(255) NULL;
 ALTER TABLE fsbr_copy.questionaries     MODIFY mail VARCHAR(255) NULL;
+-- Рекомендуется: привести типы к типам players/questionaries (signed smallint вмещает ID только до 32767)
+ALTER TABLE fsbr_copy.aux_questionaries
+  MODIFY player_id SMALLINT UNSIGNED NULL,
+  MODIFY club_id   SMALLINT UNSIGNED NULL;
