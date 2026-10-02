@@ -14,7 +14,13 @@ return [
 
     // Письма (код подтверждения e-mail в анкете). mail_from обязателен.
     'mail_from'      => '',          // например 'anketa@ваш-сайт.ru' (должен принадлежать вашему домену)
-    'mail_transport' => 'mail',      // 'mail' — PHP mail(); 'file' — не отправлять, писать в data/mail_outbox.json.php (для проверки)
+    'mail_transport' => 'smtp',      // 'smtp' — через SMTP-сервер (рекомендуется); 'mail' — PHP mail(); 'file' — не отправлять, писать в data/mail_outbox.json.php (для проверки)
+    'smtp_host'   => '',             // например 'smtp.yandex.ru'
+    'smtp_port'   => 465,            // 465 (ssl) или 587 (tls)
+    'smtp_secure' => 'ssl',          // 'ssl' — SSL с первого пакета (465); 'tls' — STARTTLS (587); '' — без шифрования
+    'smtp_user'   => '',             // логин (обычно полный адрес ящика)
+    'smtp_pass'   => '',             // пароль ящика / пароль приложения
+    // mail_from должен совпадать с ящиком smtp_user (большинство серверов иначе отклоняют письмо)
 
     // Адрес для фото игроков (показывается в анкете; пусто — без адреса)
     'photo_mail' => '',

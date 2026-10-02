@@ -351,6 +351,96 @@ function mail_note_error(?string $msg): void
     $f = app_data_dir() . '/mail_error.json.php';
     data_write_json($f, $msg === null ? [] : ['t' => date('c'), 'msg' => $msg]);
 }
+/**
+ * Отправка через SMTP (без внешних библиотек): SSL (465), STARTTLS (587) или без шифрования.
+ * @return string|null текст ошибки или null при успехе
+ */
+function app_smtp_send(array $c, string $from, string $to, string $subject, string $body): ?string
+{
+    $host = (string)($c['smtp_host'] ?? '');
+    $port = (int)($c['smtp_port'] ?? 587);
+    $secure = strtolower((string)($c['smtp_secure'] ?? 'tls')); // ssl | tls | ''
+    $user = (string)($c['smtp_user'] ?? '');
+    $pass = (string)($c['smtp_pass'] ?? '');
+    if ($host === '') {
+        return 'В config.php не задан smtp_host';
+    }
+    $errno = 0;
+    $errstr = '';
+    $fp = @stream_socket_client(($secure === 'ssl' ? 'ssl://' : 'tcp://') . $host . ':' . $port, $errno, $errstr, 15);
+    if (!$fp) {
+        return "SMTP: не удалось подключиться к {$host}:{$port} ({$errstr})";
+    }
+    stream_set_timeout($fp, 20);
+    $read = function () use ($fp): array {
+        $code = 0;
+        $text = '';
+        while (($line = fgets($fp, 1024)) !== false) {
+            $text .= $line;
+            if (strlen($line) < 4 || $line[3] !== '-') {
+                $code = (int)substr($line, 0, 3);
+                break;
+            }
+        }
+        return [$code, trim($text)];
+    };
+    $cmd = function (string $line, array $okCodes) use ($fp, $read): ?string {
+        fwrite($fp, $line . "\r\n");
+        [$code, $text] = $read();
+        return in_array($code, $okCodes, true) ? null : "SMTP ответил {$code}: {$text}";
+    };
+    try {
+        [$code, $text] = $read();
+        if ($code !== 220) {
+            return "SMTP: приветствие {$code}: {$text}";
+        }
+        $ehlo = (string)($c['smtp_helo'] ?? 'localhost');
+        if ($e = $cmd('EHLO ' . $ehlo, [250])) {
+            return $e;
+        }
+        if ($secure === 'tls') {
+            if ($e = $cmd('STARTTLS', [220])) {
+                return $e;
+            }
+            if (!@stream_socket_enable_crypto($fp, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
+                return 'SMTP: не удалось включить TLS (STARTTLS)';
+            }
+            if ($e = $cmd('EHLO ' . $ehlo, [250])) {
+                return $e;
+            }
+        }
+        if ($user !== '') {
+            if ($e = $cmd('AUTH LOGIN', [334]) ?? $cmd(base64_encode($user), [334]) ?? $cmd(base64_encode($pass), [235])) {
+                return 'SMTP: авторизация не прошла. ' . $e;
+            }
+        }
+        if ($e = $cmd('MAIL FROM:<' . $from . '>', [250])) {
+            return $e;
+        }
+        if ($e = $cmd('RCPT TO:<' . $to . '>', [250, 251])) {
+            return $e;
+        }
+        if ($e = $cmd('DATA', [354])) {
+            return $e;
+        }
+        $subj = '=?UTF-8?B?' . base64_encode(str_replace(["\r", "\n"], ' ', $subject)) . '?=';
+        $msg = 'Date: ' . date('r') . "\r\n"
+            . "From: {$from}\r\nTo: {$to}\r\nSubject: {$subj}\r\n"
+            . "MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n"
+            . 'Message-ID: <' . bin2hex(random_bytes(8)) . '@' . (preg_replace('/^.*@/', '', $from) ?: 'localhost') . ">\r\n\r\n"
+            . chunk_split(base64_encode($body), 76, "\r\n");
+        fwrite($fp, $msg . "\r\n.\r\n");
+        [$code, $text] = $read();
+        if ($code !== 250) {
+            return "SMTP не принял письмо: {$code} {$text}";
+        }
+        $cmd('QUIT', [221]);
+        return null;
+    } finally {
+        @fclose($fp);
+    }
+}
+
 function app_send_mail(string $to, string $subject, string $body): bool
 {
     if (!mail_address_ok($to)) {
@@ -367,6 +457,11 @@ function app_send_mail(string $to, string $subject, string $body): bool
         $box[] = ['t' => date('c'), 'to' => $to, 'subject' => $subject, 'body' => $body];
         data_write_json(app_data_dir() . '/mail_outbox.json.php', array_slice($box, -50));
         return true;
+    }
+    if (($c['mail_transport'] ?? 'mail') === 'smtp') {
+        $err = app_smtp_send($c, $from, $to, $subject, $body);
+        mail_note_error($err);
+        return $err === null;
     }
     if (!function_exists('mail')) {
         mail_note_error('Функция mail() отключена на хостинге (disable_functions).');
