@@ -58,3 +58,7 @@ GRANT SELECT                         ON fsbr_copy.clubs             TO 'fsbr_tk_
 -- 5. Анкеты: итоговая анкета пишется в questionaries; её читает и публичная форма (сверка личности)
 GRANT SELECT, INSERT ON fsbr_copy.questionaries TO 'fsbr_tk_rw'@'%';
 GRANT SELECT         ON fsbr_copy.questionaries TO 'fsbr_tk_q'@'%';
+
+-- 6. Несколько e-mail в анкете: расширить поле (иначе длина списка ограничена 80 символами)
+ALTER TABLE fsbr_copy.aux_questionaries MODIFY mail VARCHAR(255) NULL;
+ALTER TABLE fsbr_copy.questionaries     MODIFY mail VARCHAR(255) NULL;

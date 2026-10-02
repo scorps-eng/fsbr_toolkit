@@ -258,8 +258,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_anketa'])) {
             }
         }
         $mail = implode(', ', $mailList);
-        if (mb_strlen($mail) > 80) {
-            throw new RuntimeException('Слишком длинный список e-mail (не более 80 символов)');
+        $mailMax = 80;
+        if ($cr = $mysqli->query("SHOW COLUMNS FROM aux_questionaries LIKE 'mail'")) {
+            if (($cc = $cr->fetch_assoc()) && preg_match('/\((\d+)\)/', (string)$cc['Type'], $mm)) {
+                $mailMax = (int)$mm[1];
+            }
+        }
+        if (mb_strlen($mail) > $mailMax) {
+            throw new RuntimeException("Слишком длинный список e-mail (не более {$mailMax} символов)");
         }
         $notVerified = array_diff($mailList, (array)($_SESSION['mail_verified'] ?? []));
         if ($notVerified) {
