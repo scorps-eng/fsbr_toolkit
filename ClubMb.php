@@ -1001,6 +1001,30 @@ function cmb_process_multi(array $files, string $month, ?int $forcedCity = null,
         $sources[] = ['file' => $f['name'], 'note' => $note, 'players' => count($players), 'sum_mb' => $sum];
     }
 
+    return cmb_finish_multi(['byId' => $byId, 'noId' => $noId, 'sources' => $sources, 'city' => $city, 'fileMonth' => $fileMonth],
+        $month, $forcedCity, $tournId);
+}
+
+/** Месяц по файлам не определился — нужно спросить пользователя (состояние разбора лежит в $state). */
+class CmbNeedMonth extends RuntimeException
+{
+    public array $state;
+
+    public function __construct(array $state)
+    {
+        parent::__construct('Месяц по файлам определить не удалось — выберите его.');
+        $this->state = $state;
+    }
+}
+
+/** Вторая половина обработки набора файлов: определение/проверка месяца и сборка итога. */
+function cmb_finish_multi(array $state, string $month, ?int $forcedCity = null, ?int $tournId = null): array
+{
+    $byId = $state['byId'];
+    $noId = $state['noId'];
+    $sources = $state['sources'];
+    $city = $state['city'];
+    $fileMonth = $state['fileMonth'];
     if ($month === '') {
         $distinct = array_values(array_unique($fileMonth));
         if (count($distinct) === 1) {
@@ -1016,7 +1040,7 @@ function cmb_process_multi(array $files, string $month, ?int $forcedCity = null,
         }
     }
     if (!preg_match('/^(\d{4})-(0[1-9]|1[0-2])$/', $month)) {
-        throw new RuntimeException('Не удалось определить месяц по файлам — укажите его в поле «Месяц» и загрузите снова');
+        throw new CmbNeedMonth($state);
     }
     $dateFrom = $month . '-01';
     $dateTo = date('Y-m-t', strtotime($dateFrom));

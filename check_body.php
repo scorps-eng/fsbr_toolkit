@@ -1164,6 +1164,7 @@ $results = null;
 $total = 0;
 $jsonReport = null;
 $clubMbMode = false;
+$needMonth = false;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
@@ -1172,7 +1173,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ? (int)$_POST['city_id'] : null;
         $tournIdOpt = (!empty($_POST['tourn_id']) && ctype_digit((string)$_POST['tourn_id']))
             ? (int)$_POST['tourn_id'] : null;
-        if (!empty($_POST['club_multi_reuse']) && is_array($_SESSION['club_multi'] ?? null)) {
+        if (!empty($_POST['club_multi_month']) && is_array($_SESSION['club_need_month'] ?? null)) {
+            // месяц не определился по файлам — пользователь выбрал его вручную, файлы заново не нужны
+            $pm = trim((string)($_POST['club_month_pick'] ?? ''));
+            try {
+                $club = cmb_finish_multi($_SESSION['club_need_month'], $pm, $forcedCity, $tournIdOpt);
+            } catch (CmbNeedMonth $e) {
+                throw new RuntimeException('Выберите месяц');
+            }
+            unset($_SESSION['club_need_month']);
+            $_SESSION['club_multi'] = ['parsed' => $club['parsed'], 'sources' => $club['sources']];
+        } elseif (!empty($_POST['club_multi_reuse']) && is_array($_SESSION['club_multi'] ?? null)) {
             // повтор после выбора города: файлы заново не нужны
             $cm = $_SESSION['club_multi'];
             $club = cmb_process_multi_parsed($cm['parsed'], $cm['sources'], $forcedCity, $tournIdOpt);
@@ -1194,7 +1205,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     } else {
                         $multi = [['path' => (string)$_FILES['file']['tmp_name'], 'name' => (string)$orig]];
                     }
-                    $club = cmb_process_multi($multi, trim((string)($_POST['club_month'] ?? '')), $forcedCity, $tournIdOpt);
+                    unset($_SESSION['club_need_month']);
+                    try {
+                        $club = cmb_process_multi($multi, '', $forcedCity, $tournIdOpt);
+                    } catch (CmbNeedMonth $nm) {
+                        $_SESSION['club_need_month'] = $nm->state;
+                        $needMonth = true;
+                        throw new RuntimeException('В файлах нет даты или месяца — выберите месяц ниже, файлы заново загружать не нужно.');
+                    }
                 } finally {
                     foreach ($tmpFiles as $tf) {
                         @unlink($tf);
@@ -1944,15 +1962,22 @@ h1{font-size:1.4rem;margin:0 0 8px}
   <h1>Проверка отчёта</h1>
   <p class="sub">Сверка ID и имён с базой FSBR. Подходят <b>турнирные протоколы</b> (пары / команды / индивидуал), <b>клубные МБ</b> («Отчет по МБ…») — файлы <b>.xls</b> и <b>.xlsx</b>, а также <b>.zip</b> с набором файлов за месяц.</p>
   <?php if ($error): ?><div class="flash"><?= h($error) ?></div><?php endif; ?>
+  <?php if ($needMonth): ?>
+  <form method="post" style="margin:0 0 16px"><?= csrf_field() ?>
+    <input type="hidden" name="club_multi_month" value="1">
+    <?php foreach (['city_id', 'tourn_id'] as $hk): if (!empty($_POST[$hk])): ?><input type="hidden" name="<?= h($hk) ?>" value="<?= h($_POST[$hk]) ?>"><?php endif; endforeach; ?>
+    <label>Месяц клубных МБ
+      <input type="month" name="club_month_pick" required style="width:auto;margin-left:6px">
+    </label>
+    <button class="btn" type="submit">Продолжить</button>
+  </form>
+  <?php endif; ?>
   <form method="post" enctype="multipart/form-data"><?= csrf_field() ?>
     <label class="drop" id="drop">
       <div id="label">Выберите файл: .xls / .xlsx (отчёт) или .zip (клубные МБ за месяц)</div>
       <input type="file" name="file" accept=".xlsx,.xls,.zip,.json" id="file" required>
     </label>
     <p class="note" style="margin:0 0 8px">Клубные МБ за период: положите все файлы месяца (JSON с парами, таблицы «ФИ / id / МБ», «Отчет по МБ») в один <b>.zip</b> — месяц и город определятся автоматически.</p>
-    <label style="display:block;margin:0 0 8px">Месяц (необязательно — только если не определился сам)
-      <input type="month" name="club_month" value="<?= h($_POST['club_month'] ?? '') ?>" style="width:auto;margin-left:6px">
-    </label>
     <button class="btn" type="submit">Проверить</button>
   </form>
   <p class="note">Турнир: вкладки Sum, «Общая информация», сессии. Клубные МБ: регион, период, id / игрок / МБ — дальше сразу SQL (без расчёта рейтинга).</p>
