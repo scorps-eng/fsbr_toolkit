@@ -20,7 +20,7 @@ const ADM_TABLES = [
     ],
     'tourn_header' => [
         'title' => 'Шапки турниров', 'pk' => 'tourn_id', 'list' => ['tourn_id', 'name', 'tour_date', 'type', 'city_id', 'status'],
-        'search' => ['name'], 'order' => 'tourn_id DESC', 'insert' => false, 'cp1251' => false, 'auto' => [],
+        'search' => ['name'], 'order' => 'tourn_id DESC', 'insert' => false, 'cp1251' => false, 'auto' => [], 'bottom' => ['champ_t'],
     ],
 ];
 

@@ -73,4 +73,5 @@ ALTER TABLE fsbr_copy.aux_questionaries ADD COLUMN verify_data VARCHAR(1000) NUL
 -- 8. Вкладка «Справочники»: правка городов, клубов, игроков и шапок турниров (players и tourn_header уже выданы выше)
 GRANT SELECT, INSERT, UPDATE ON fsbr_copy.cities TO 'fsbr_tk_rw'@'%';
 GRANT SELECT, INSERT, UPDATE ON fsbr_copy.clubs  TO 'fsbr_tk_rw'@'%';
+GRANT SELECT ON fsbr_copy.streams TO 'fsbr_tk_rw'@'%';   -- список потоков в форме шапки турнира
 -- tourn_header: UPDATE уже есть. Удаление строк в интерфейсе не предусмотрено.

@@ -95,6 +95,30 @@ foreach (adm_rows($db, 'SELECT club_id, name, shortname FROM clubs') as $r) {
 uasort($clubMap, fn($a, $b) => strcmp(adm_name_key($a), adm_name_key($b)));
 
 $post = ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ($_POST['tab'] ?? '') === 'admin';
+$streamMap = [];
+$tournOpts = [];
+if ($t === 'tourn_header' && (!empty($_GET['new']) || (int)($_GET['id'] ?? $_POST['id'] ?? 0) > 0)) {
+    require_once __DIR__ . '/TournamentSuggest.php';
+    $sl = TournamentSuggest::allStreams($db, 5000);
+    if (!$sl) {   // у учётки записи может не быть права на streams — пробуем чтение
+        try {
+            $ro = db_ro();
+            $sl = $ro ? TournamentSuggest::allStreams($ro, 5000) : [];
+        } catch (Throwable $e) {
+            $sl = [];
+        }
+    }
+    foreach ($sl as $x) {
+        $streamMap[(int)$x['stream_id']] = (string)$x['name'];
+    }
+    $selfId = (int)($_GET['id'] ?? $_POST['id'] ?? 0);
+    foreach (adm_rows($db, 'SELECT tourn_id, name, tour_date, city_id FROM tourn_header ORDER BY tour_date DESC, tourn_id DESC') as $r) {
+        if ((int)$r['tourn_id'] === $selfId) {
+            continue;
+        }
+        $tournOpts[(int)$r['tourn_id']] = [(int)$r['tourn_id'], trim(substr((string)$r['tour_date'], 0, 10) . ' · ' . (string)$r['name']) . ' (' . (int)$r['tourn_id'] . ')', $r['city_id'] === null ? null : (int)$r['city_id']];
+    }
+}
 $act = $post ? (string)($_POST['act'] ?? '') : '';
 $isNew = !empty($_GET['new']) || ($post && !empty($_POST['is_new']));
 $id = (int)($_GET['id'] ?? $_POST['id'] ?? 0);
@@ -136,6 +160,24 @@ if ($post && $act === 'build' && ($row || ($isNew && $def['insert']))) {
         }
         if ($v !== null && $c === 'club_id' && !isset($clubMap[(int)$v])) {
             $errs[] = 'Клуб с ID ' . (int)$v . ' не найден';
+        }
+    }
+    if ($t === 'tourn_header') {
+        $oldRow = $row ?? [];
+        $np = $new['prev_id'] ?? null;
+        if ($np !== null && (!$isNew ? (string)$np !== (string)($oldRow['prev_id'] ?? '') : true)) {
+            $pr = $tournOpts[(int)$np] ?? null;
+            $nc = $new['city_id'] ?? null;
+            if ($pr === null) {
+                $errs[] = 'Предыдущий турнир: турнир с ID ' . (int)$np . ' не найден';
+            } elseif ($nc !== null && $pr[2] !== (int)$nc) {
+                $errs[] = 'Предыдущий турнир должен быть из того же города (выбран турнир другого города)';
+            }
+        }
+        $ns = $new['stream'] ?? null;
+        if ($ns !== null && $streamMap && !isset($streamMap[(int)$ns])
+            && (string)$ns !== (string)($oldRow['stream'] ?? '')) {
+            $errs[] = 'Поток (stream) с ID ' . (int)$ns . ' не найден';
         }
     }
     if ($isNew && $def['search'] && ($new[$def['search'][0]] ?? '') === '') {
@@ -255,6 +297,14 @@ pre.sp-sql{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;font-
 
 <?php if ($row || $isNew): ?>
 <?php
+    $formCols = $cols;
+    foreach ($def['bottom'] ?? [] as $bc) {   // поля, которые уводим вниз формы
+        if (isset($formCols[$bc])) {
+            $tmp = $formCols[$bc];
+            unset($formCols[$bc]);
+            $formCols[$bc] = $tmp;
+        }
+    }
     $building = $post && $act === 'build';
     $valOf = function (string $c) use ($building, $row) {
         if ($building) {
@@ -270,7 +320,7 @@ pre.sp-sql{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;font-
   <input type="hidden" name="id" value="<?= $isNew ? 0 : $id ?>"><?php if ($isNew): ?><input type="hidden" name="is_new" value="1"><?php endif; ?>
   <b><?= h($def['title']) ?>: <?= $isNew ? 'новая запись' : h($pk) . ' = ' . $id ?></b>
   <table class="sp-table" style="margin-top:8px">
-    <?php foreach ($cols as $c => $m): ?>
+    <?php foreach ($formCols as $c => $m): ?>
     <tr>
       <td style="width:30%"><?= h(ADM_LABELS[$c] ?? $c) ?> <span class="sp-mut">(<?= h($c) ?>)</span></td>
       <td>
@@ -284,6 +334,24 @@ pre.sp-sql{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;font-
         <select name="f_club_id" class="sp-in"><option value="">—</option>
           <?php foreach ($clubMap as $cid => $cn): ?><option value="<?= $cid ?>" <?= $valOf($c) === (string)$cid ? 'selected' : '' ?>><?= h($cn) ?> (<?= $cid ?>)</option><?php endforeach; ?>
         </select>
+      <?php elseif ($t === 'tourn_header' && ($c === 'stream' || $c === 'prev_id')): ?>
+        <?php
+          $opts = [];
+          if ($c === 'stream') {
+              foreach ($streamMap as $sid => $sn) { $opts[] = [$sid, $sn . ' (' . $sid . ')', null]; }
+          } else {
+              $opts = array_values($tournOpts);
+          }
+          $cur = $valOf($c);
+          $GLOBALS['sp_combos'][] = ['field' => $c, 'options' => $opts, 'value' => $cur];
+        ?>
+        <div class="sp-combo" id="combo_<?= h($c) ?>">
+          <input type="hidden" name="f_<?= h($c) ?>" value="<?= h($cur) ?>">
+          <input type="text" class="sp-in sp-combo-text" autocomplete="off" placeholder="начните вводить слова для поиска">
+          <div class="sp-combo-list" hidden></div>
+        </div>
+        <?php if ($c === 'prev_id'): ?><div class="sp-mut" style="margin-top:4px">Показаны только турниры выбранного города. При смене города выбор сбрасывается.</div><?php endif; ?>
+        <?php if ($c === 'stream' && !$streamMap): ?><div class="sp-warn" style="margin-top:4px">Список потоков не прочитан (нет права SELECT на таблицу streams): выполните раздел 8 из db_setup.sql.</div><?php endif; ?>
       <?php elseif ($c === 'sex'): ?>
         <select name="f_sex" class="sp-in">
           <option value="1" <?= $valOf($c) === '1' ? 'selected' : '' ?>>Мужской</option>
@@ -382,4 +450,67 @@ pre.sp-sql{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;font-
   </p>
   <?php endif; ?>
 </div>
+<?php endif; ?>
+<?php if (!empty($GLOBALS['sp_combos'])): ?>
+<style>
+.sp-combo{position:relative}
+.sp-combo-list{position:absolute;z-index:20;left:0;right:0;max-height:260px;overflow:auto;background:#0f172a;border:1px solid #334155;border-radius:6px;margin-top:2px}
+.sp-combo-list div{padding:6px 9px;cursor:pointer;border-bottom:1px solid #1e293b}
+.sp-combo-list div:hover,.sp-combo-list div.on{background:#1e3a5f}
+.sp-combo-list .none{color:var(--muted);cursor:default}
+</style>
+<script>
+(function(){
+  var combos = <?= json_encode($GLOBALS['sp_combos'], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+  var citySel = document.querySelector('select[name=f_city_id]');
+  combos.forEach(function(cfg){
+    var root = document.getElementById('combo_' + cfg.field);
+    if (!root) return;
+    var hid = root.querySelector('input[type=hidden]'), txt = root.querySelector('.sp-combo-text'), list = root.querySelector('.sp-combo-list');
+    var byId = {}; cfg.options.forEach(function(o){ byId[o[0]] = o; });
+    function labelOf(v){ return byId[v] ? byId[v][1] : (v ? ('ID ' + v) : ''); }
+    function cityNow(){ return (cfg.field === 'prev_id' && citySel && citySel.value !== '') ? parseInt(citySel.value, 10) : null; }
+    function pool(){
+      var c = cityNow();
+      return cfg.options.filter(function(o){ return c === null || o[2] === c; });
+    }
+    function render(){
+      var words = txt.value.toLowerCase().split(/\s+/).filter(Boolean);
+      var shown = txt.dataset.pick === '1' ? [] : words;
+      var res = pool().filter(function(o){
+        var l = o[1].toLowerCase();
+        return shown.every(function(w){ return l.indexOf(w) !== -1; });
+      });
+      list.innerHTML = '';
+      var clr = document.createElement('div'); clr.textContent = '— не задано —'; clr.className = 'none';
+      clr.style.cursor = 'pointer'; clr.onmousedown = function(e){ e.preventDefault(); pick(null); };
+      list.appendChild(clr);
+      res.slice(0, 100).forEach(function(o){
+        var d = document.createElement('div'); d.textContent = o[1];
+        d.onmousedown = function(e){ e.preventDefault(); pick(o[0]); };
+        list.appendChild(d);
+      });
+      if (!res.length) { var n = document.createElement('div'); n.className = 'none'; n.textContent = 'ничего не найдено'; list.appendChild(n); }
+      else if (res.length > 100) { var m = document.createElement('div'); m.className = 'none'; m.textContent = 'ещё ' + (res.length - 100) + ' — уточните поиск'; list.appendChild(m); }
+      list.hidden = false;
+    }
+    function pick(v){
+      hid.value = v === null ? '' : String(v);
+      txt.value = v === null ? '' : labelOf(v);
+      txt.dataset.pick = '0';
+      list.hidden = true;
+    }
+    txt.addEventListener('focus', function(){ txt.dataset.pick = '1'; render(); txt.select(); });
+    txt.addEventListener('input', function(){ txt.dataset.pick = '0'; render(); });
+    txt.addEventListener('blur', function(){ list.hidden = true; txt.value = hid.value ? labelOf(parseInt(hid.value, 10)) : ''; });
+    if (cfg.field === 'prev_id' && citySel) {
+      citySel.addEventListener('change', function(){
+        var o = byId[parseInt(hid.value, 10)], c = cityNow();
+        if (hid.value && c !== null && (!o || o[2] !== c)) { pick(null); }
+      });
+    }
+    txt.value = cfg.value ? labelOf(parseInt(cfg.value, 10)) : '';
+  });
+})();
+</script>
 <?php endif; ?>
