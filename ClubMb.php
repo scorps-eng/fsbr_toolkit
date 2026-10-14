@@ -397,7 +397,7 @@ function cmb_validate(array $players): array
         $entry['city'] = $row['city_name'] ?? null;
         $entry['state'] = isset($row['state']) ? (int)$row['state'] : null;
         // то же сравнение, что при проверке турниров (порядок слов, инициалы, ё/е)
-        if (trim((string)($p['name'] ?? '')) === '' || names_match((string)($p['name'] ?? ''), (string)($row['family'] ?? ''), (string)($row['given'] ?? ''), (string)($row['patronymic'] ?? ''))) {
+        if (!empty($p['nick']) || trim((string)($p['name'] ?? '')) === '' || names_match((string)($p['name'] ?? ''), (string)($row['family'] ?? ''), (string)($row['given'] ?? ''), (string)($row['patronymic'] ?? ''))) {
             $entry['status'] = 'ok';
         } else {
             $entry['status'] = 'name_mismatch';
@@ -903,20 +903,41 @@ function cmb_parse_json_report(string $text): array
         if (!is_array($r)) {
             continue;
         }
-        $mb = cmb_to_num($r['mb'] ?? null) ?? 0.0;
-        foreach ([['name1', 'id1'], ['name2', 'id2'], ['name', 'id']] as [$nk, $ik]) {
+        // МБ: mb (основной формат) или emb (выгрузка Gambler)
+        $mbRaw = $r['mb'] ?? ($r['emb'] ?? null);
+        $mb = cmb_to_num($mbRaw) ?? 0.0;
+        // имя: name1/name2/name; для Gambler — nick (ник, а не ФИО: имя с базой не сверяется)
+        foreach ([['name1', 'id1'], ['name2', 'id2'], ['name', 'id'], ['nick', 'id']] as [$nk, $ik]) {
             if (!array_key_exists($nk, $r) && !array_key_exists($ik, $r)) {
                 continue;
+            }
+            if ($nk === 'nick' && (array_key_exists('name', $r) || array_key_exists('name1', $r))) {
+                continue; // уже обработано выше
+            }
+            if ($nk === 'name' && !array_key_exists('name', $r) && array_key_exists('nick', $r)) {
+                continue; // запись с одним ником — обработает вариант 'nick'
             }
             $idRaw = trim((string)($r[$ik] ?? ''));
             $players[] = [
                 'player_id' => ($idRaw !== '' && ctype_digit($idRaw)) ? (int)$idRaw : null,
                 'name' => trim((string)($r[$nk] ?? '')),
                 'mb' => $mb,
-            ];
+            ] + ($nk === 'nick' ? ['nick' => true] : []);
         }
     }
-    $date = isset($d['date']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$d['date']) ? (string)$d['date'] : null;
+    $pick = function (array $keys) use ($d): ?string {
+        foreach ($keys as $k) {
+            if (isset($d[$k]) && preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$d[$k])) {
+                return (string)$d[$k];
+            }
+        }
+        return null;
+    };
+    $date = $pick(['date', 'date-from', 'date_from', 'from']);
+    $till = $pick(['date-till', 'date_till', 'date-to', 'date_to', 'till', 'to']);
+    if ($date !== null && $till !== null && substr($date, 0, 7) !== substr($till, 0, 7)) {
+        throw new RuntimeException('Период отчёта ' . $date . ' — ' . $till . ' охватывает несколько месяцев: клубные МБ загружаются за один месяц.');
+    }
     return [
         'players' => $players,
         'note' => 'JSON, МБ пары каждому игроку',
@@ -990,12 +1011,12 @@ function cmb_process_multi(array $files, string $month, ?int $forcedCity = null,
             if ($p['player_id'] !== null) {
                 $k = (int)$p['player_id'];
                 if (!isset($byId[$k])) {
-                    $byId[$k] = ['n' => null, 'player_id' => $k, 'name' => $p['name'], 'mb' => 0.0, 'src' => []];
+                    $byId[$k] = ['n' => null, 'player_id' => $k, 'name' => $p['name'], 'mb' => 0.0, 'src' => []] + (!empty($p['nick']) ? ['nick' => true] : []);
                 }
                 $byId[$k]['mb'] += $mb;
                 $byId[$k]['src'][$f['name']] = ($byId[$k]['src'][$f['name']] ?? 0.0) + $mb;
             } else {
-                $noId[] = ['n' => null, 'player_id' => null, 'name' => $p['name'], 'mb' => $mb, 'src' => [$f['name'] => $mb]];
+                $noId[] = ['n' => null, 'player_id' => null, 'name' => $p['name'], 'mb' => $mb, 'src' => [$f['name'] => $mb]] + (!empty($p['nick']) ? ['nick' => true] : []);
             }
         }
         $sources[] = ['file' => $f['name'], 'note' => $note, 'players' => count($players), 'sum_mb' => $sum];
