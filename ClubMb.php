@@ -724,7 +724,8 @@ function cmb_build_sql(array $meta, array $validated, ?int $cityId = null, ?int 
         }
         $pid = (int)$p['player_id'];
         $mbInt = (int)round($mb);
-        $lines[] = "INSERT INTO tourn_ind (tind_id, tour_id, team_id, PB, RO, MB, EMB, Result, PlaceH, PlaceL) VALUES (0, {$tidSql}, {$pid}, 0, 0, {$mbInt}, 0, 0, 0, 0);";
+        $embInt = (int)round((float)($p['emb'] ?? 0)); // онлайн-МБ (Gambler) — в поле EMB
+        $lines[] = "INSERT INTO tourn_ind (tind_id, tour_id, team_id, PB, RO, MB, EMB, Result, PlaceH, PlaceL) VALUES (0, {$tidSql}, {$pid}, 0, 0, {$mbInt}, {$embInt}, 0, 0, 0);";
         $n++;
     }
     $lines[] = '';
@@ -923,9 +924,11 @@ function cmb_parse_json_report(string $text): array
         if (!is_array($r)) {
             continue;
         }
-        // МБ: mb (основной формат) или emb (выгрузка Gambler)
-        $mbRaw = $r['mb'] ?? ($r['emb'] ?? null);
+        // МБ: mb (основной формат) или emb (выгрузка Gambler: онлайн-МБ, они же полные МБ и пишутся также в EMB)
+        $embRaw = $r['emb'] ?? null;
+        $mbRaw = $r['mb'] ?? $embRaw;
         $mb = cmb_to_num($mbRaw) ?? 0.0;
+        $emb = ($embRaw !== null) ? (cmb_to_num($embRaw) ?? 0.0) : null;
         // имя: name1/name2/name; для Gambler — nick (ник, а не ФИО: имя с базой не сверяется)
         foreach ([['name1', 'id1'], ['name2', 'id2'], ['name', 'id'], ['nick', 'id']] as [$nk, $ik]) {
             if (!array_key_exists($nk, $r) && !array_key_exists($ik, $r)) {
@@ -942,7 +945,7 @@ function cmb_parse_json_report(string $text): array
                 'player_id' => ($idRaw !== '' && ctype_digit($idRaw)) ? (int)$idRaw : null,
                 'name' => trim((string)($r[$nk] ?? '')),
                 'mb' => $mb,
-            ] + ($nk === 'nick' ? ['nick' => true] : []);
+            ] + ($nk === 'nick' ? ['nick' => true] : []) + ($emb !== null ? ['emb' => $emb] : []);
         }
     }
     $pick = function (array $keys) use ($d): ?string {
@@ -1034,9 +1037,12 @@ function cmb_process_multi(array $files, string $month, ?int $forcedCity = null,
                     $byId[$k] = ['n' => null, 'player_id' => $k, 'name' => $p['name'], 'mb' => 0.0, 'src' => []] + (!empty($p['nick']) ? ['nick' => true] : []);
                 }
                 $byId[$k]['mb'] += $mb;
+                if (isset($p['emb'])) {
+                    $byId[$k]['emb'] = ($byId[$k]['emb'] ?? 0.0) + (float)$p['emb'];
+                }
                 $byId[$k]['src'][$f['name']] = ($byId[$k]['src'][$f['name']] ?? 0.0) + $mb;
             } else {
-                $noId[] = ['n' => null, 'player_id' => null, 'name' => $p['name'], 'mb' => $mb, 'src' => [$f['name'] => $mb]] + (!empty($p['nick']) ? ['nick' => true] : []);
+                $noId[] = ['n' => null, 'player_id' => null, 'name' => $p['name'], 'mb' => $mb, 'src' => [$f['name'] => $mb]] + (!empty($p['nick']) ? ['nick' => true] : []) + (isset($p['emb']) ? ['emb' => (float)$p['emb']] : []);
             }
         }
         $sources[] = ['file' => $f['name'], 'note' => $note, 'players' => count($players), 'sum_mb' => $sum];
