@@ -411,6 +411,15 @@ function cmb_validate(array $players): array
     return $out;
 }
 
+/** Онлайн-клубы и прочие «города», которые однозначно соответствуют city_id (написание в отчёте → city_id). */
+function cmb_city_id_aliases(): array
+{
+    return [
+        'gambler' => 182,
+        'gambler.ru' => 182,
+    ];
+}
+
 function cmb_region_aliases(): array
 {
     // регион / написание → предпочтительное имя города в cities
@@ -528,6 +537,17 @@ function cmb_resolve_city(?mysqli $db, array $meta, ?int $forcedId = null): arra
     foreach (['club', 'region'] as $k) {
         $s = trim((string)($meta[$k] ?? ''));
         if ($s !== '') $rawList[] = $s;
+    }
+    // однозначные соответствия «написание → city_id» (например, Gambler.ru = 182)
+    $idAliases = cmb_city_id_aliases();
+    foreach ($rawList as $raw) {
+        $aid = $idAliases[cmb_norm_place($raw)] ?? null;
+        if ($aid !== null) {
+            $res = @$db->query('SELECT city_id, city_name FROM cities WHERE city_id = ' . (int)$aid . ' LIMIT 1');
+            if ($res && ($row = $res->fetch_assoc())) {
+                return ['city_id' => (int)$row['city_id'], 'city_name' => (string)$row['city_name'], 'matched_by' => 'exact:alias ' . $raw];
+            }
+        }
     }
     $aliases = cmb_region_aliases();
     $tryNames = [];
